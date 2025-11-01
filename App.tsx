@@ -1,15 +1,62 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import GitGalaxyCanvas from './components/GitGalaxyCanvas';
 import CommitInfoPanel from './components/CommitInfoPanel';
 import RepoInputForm from './components/RepoInputForm';
 import Loader from './components/Loader';
-import type { CommitNode, RepoData } from './types';
+import Header from './components/Header';
+import ConstellationCanvas from './components/ConstellationCanvas';
+import type { CommitNode, RepoData, User, ConstellationRepo } from './types';
 
 const App: React.FC = () => {
   const [selectedCommit, setSelectedCommit] = useState<{ hash: string, node: CommitNode } | null>(null);
   const [repoData, setRepoData] = useState<RepoData | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  
+  // New state for authentication and constellation view
+  const [view, setView] = useState<'constellation' | 'detail'>('constellation');
+  const [authState, setAuthState] = useState<'loading' | 'authenticated' | 'unauthenticated'>('loading');
+  const [user, setUser] = useState<User | null>(null);
+  const [userRepos, setUserRepos] = useState<ConstellationRepo[]>([]);
+
+  // Check authentication status on mount
+  useEffect(() => {
+    const checkAuthStatus = async () => {
+      try {
+        const response = await fetch('/api/auth/status', {
+          credentials: 'include'
+        });
+        
+        const data = await response.json();
+        
+        if (data.authenticated && data.user) {
+          setAuthState('authenticated');
+          setUser(data.user);
+          
+          // Fetch user's repositories
+          try {
+            const reposResponse = await fetch('/api/user/repos', {
+              credentials: 'include'
+            });
+            
+            if (reposResponse.ok) {
+              const repos = await reposResponse.json();
+              setUserRepos(repos);
+            }
+          } catch (err) {
+            console.error('Failed to fetch repositories:', err);
+          }
+        } else {
+          setAuthState('unauthenticated');
+        }
+      } catch (err) {
+        console.error('Failed to check auth status:', err);
+        setAuthState('unauthenticated');
+      }
+    };
+    
+    checkAuthStatus();
+  }, []);
 
   const handleAnalyzeRepo = async (repoUrl: string) => {
     setIsLoading(true);
@@ -23,6 +70,7 @@ const App: React.FC = () => {
         headers: {
           'Content-Type': 'application/json',
         },
+        credentials: 'include',
         body: JSON.stringify({ repoUrl }),
       });
 
@@ -33,6 +81,7 @@ const App: React.FC = () => {
 
       const data: RepoData = await response.json();
       setRepoData(data);
+      setView('detail');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An unknown error occurred');
     } finally {
@@ -40,25 +89,111 @@ const App: React.FC = () => {
     }
   };
 
+  const handleRepoSelect = (repo: ConstellationRepo) => {
+    handleAnalyzeRepo(repo.clone_url);
+  };
+
+  const handleLogout = () => {
+    setAuthState('unauthenticated');
+    setUser(null);
+    setUserRepos([]);
+    setView('constellation');
+    setRepoData(null);
+    setSelectedCommit(null);
+  };
+
   return (
     <main className="relative w-screen h-screen bg-black overflow-hidden">
-      {repoData && <GitGalaxyCanvas repoData={repoData} onCommitSelect={setSelectedCommit} selectedCommit={selectedCommit} />}
-      
-      <div className="absolute top-0 left-0 p-4 md:p-8 pointer-events-none">
-        <h1 className="text-2xl md:text-4xl font-mono text-cyan-300/80 tracking-widest">3D Git Galaxy</h1>
-        {!repoData && <p className="text-sm md:text-base font-mono text-white/60 mt-2">Visualize a public Git repository</p>}
-      </div>
+      <Header 
+        authState={authState} 
+        user={user} 
+        onLogout={handleLogout}
+        onSearchRepo={handleAnalyzeRepo}
+      />
 
-      {!repoData && !isLoading && <RepoInputForm onAnalyze={handleAnalyzeRepo} error={error} />}
-      {isLoading && <Loader />}
-      
-      {repoData && <CommitInfoPanel commit={selectedCommit} onClose={() => setSelectedCommit(null)} />}
-      
-      {repoData && (
-        <div className="absolute bottom-0 right-0 p-4 md:p-8 pointer-events-none text-right">
-           <p className="text-xs md:text-sm font-mono text-white/40">Click a node to inspect</p>
-           <p className="text-xs md:text-sm font-mono text-white/40">Drag to rotate | Scroll to zoom</p>
-        </div>
+      {authState === 'loading' && (
+        <Loader />
+      )}
+
+      {authState === 'unauthenticated' && (
+        <>
+          {!repoData && !isLoading && (
+            <RepoInputForm onAnalyze={handleAnalyzeRepo} error={error} />
+          )}
+          {isLoading && <Loader />}
+          {repoData && view === 'detail' && (
+            <>
+              <GitGalaxyCanvas 
+                repoData={repoData} 
+                onCommitSelect={setSelectedCommit} 
+                selectedCommit={selectedCommit} 
+              />
+              <CommitInfoPanel 
+                commit={selectedCommit} 
+                onClose={() => setSelectedCommit(null)} 
+              />
+              <button
+                onClick={() => {
+                  setView('constellation');
+                  setRepoData(null);
+                  setSelectedCommit(null);
+                }}
+                className="absolute bottom-3 sm:bottom-4 left-3 sm:left-4 px-3 sm:px-4 py-1.5 sm:py-2 bg-cyan-500/80 hover:bg-cyan-500 text-black font-mono font-bold rounded transition-colors z-50 text-xs sm:text-sm"
+              >
+                Back to Repository List
+              </button>
+            </>
+          )}
+        </>
+      )}
+
+      {authState === 'authenticated' && (
+        <>
+          {view === 'constellation' && userRepos.length > 0 && (
+            <>
+              <ConstellationCanvas 
+                repos={userRepos} 
+                onRepoSelect={handleRepoSelect}
+              />
+              <div className="absolute bottom-0 right-0 p-3 sm:p-4 md:p-6 lg:p-8 pointer-events-none text-right">
+                <p className="text-xs sm:text-sm font-mono text-white/40">Click a repository to analyze</p>
+                <p className="text-xs sm:text-sm font-mono text-white/40 hidden sm:block">Hover to see repository names</p>
+                <p className="text-xs sm:text-sm font-mono text-white/40 sm:hidden">Tap to see details</p>
+              </div>
+            </>
+          )}
+          
+          {view === 'detail' && repoData && (
+            <>
+              <GitGalaxyCanvas 
+                repoData={repoData} 
+                onCommitSelect={setSelectedCommit} 
+                selectedCommit={selectedCommit} 
+              />
+              <CommitInfoPanel 
+                commit={selectedCommit} 
+                onClose={() => setSelectedCommit(null)} 
+              />
+              <button
+                onClick={() => {
+                  setView('constellation');
+                  setRepoData(null);
+                  setSelectedCommit(null);
+                }}
+                className="absolute bottom-3 sm:bottom-4 left-3 sm:left-4 px-3 sm:px-4 py-1.5 sm:py-2 bg-cyan-500/80 hover:bg-cyan-500 text-black font-mono font-bold rounded transition-colors z-50 text-xs sm:text-sm"
+              >
+                Back to Constellation
+              </button>
+              <div className="absolute bottom-0 right-0 p-3 sm:p-4 md:p-6 lg:p-8 pointer-events-none text-right">
+                <p className="text-xs sm:text-sm font-mono text-white/40">Click a node to inspect</p>
+                <p className="text-xs sm:text-sm font-mono text-white/40 hidden sm:block">Drag to rotate | Scroll to zoom</p>
+                <p className="text-xs sm:text-sm font-mono text-white/40 sm:hidden">Drag & scroll to navigate</p>
+              </div>
+            </>
+          )}
+          
+          {isLoading && <Loader />}
+        </>
       )}
     </main>
   );

@@ -1,0 +1,5 @@
+{
+  "name": "3D Git Galaxy",
+  "description": "A 3D generative art piece visualizing a Git commit graph, creating a 'TRON'-style glowing effect with Three.js and post-processing.",
+  "requestFramePermissions": []
+}

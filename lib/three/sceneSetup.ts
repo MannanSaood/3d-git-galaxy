@@ -33,6 +33,32 @@ export const initScene = (canvas: HTMLCanvasElement) => {
   controls.enableDamping = true;
   controls.autoRotate = true;
   controls.autoRotateSpeed = 0.5;
+  
+  // Enhanced touch controls for mobile devices
+  controls.enablePan = true;
+  controls.enableZoom = true;
+  controls.enableRotate = true;
+  
+  // Improve zoom sensitivity for touch devices
+  controls.zoomSpeed = 1.2;
+  controls.minDistance = 3;
+  controls.maxDistance = 50;
+  
+  // Improve touch rotation
+  controls.rotateSpeed = 0.8;
+  controls.panSpeed = 0.8;
+  
+  // Auto-rotate stops on user interaction
+  controls.autoRotate = true;
+  controls.addEventListener('start', () => {
+    controls.autoRotate = false;
+  });
+  controls.addEventListener('end', () => {
+    // Resume auto-rotate after a delay
+    setTimeout(() => {
+      controls.autoRotate = true;
+    }, 2000);
+  });
 
   // Post-processing
   const renderScene = new RenderPass(scene, camera);

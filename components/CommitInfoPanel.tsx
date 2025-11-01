@@ -12,7 +12,7 @@ const CommitInfoPanel: React.FC<CommitInfoPanelProps> = ({ commit, onClose }) =>
   }
 
   return (
-    <div className="absolute top-16 sm:top-20 md:top-24 left-3 right-3 sm:left-4 sm:right-auto sm:w-72 md:w-80 lg:w-96 max-w-[calc(100vw-1.5rem)] sm:max-w-none bg-black/70 backdrop-blur-sm border border-cyan-300/20 rounded-lg p-3 sm:p-4 text-white font-mono shadow-lg shadow-cyan-500/10 transition-opacity duration-300 animate-fade-in z-60">
+    <div className="absolute top-24 sm:top-28 md:top-32 left-3 right-3 sm:left-auto sm:right-4 sm:w-72 md:w-80 lg:w-96 max-w-[calc(100vw-1.5rem)] sm:max-w-none bg-black/70 backdrop-blur-sm border border-cyan-300/20 rounded-lg p-3 sm:p-4 text-white font-mono shadow-lg shadow-cyan-500/10 transition-opacity duration-300 animate-fade-in z-60">
       <div className="flex justify-between items-start gap-2">
         <div className="flex-1 min-w-0">
           <h2 className="text-xs sm:text-sm text-cyan-300/80 uppercase tracking-widest">Commit Details</h2>

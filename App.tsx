@@ -156,9 +156,9 @@ const App: React.FC = () => {
                 onRepoSelect={handleRepoSelect}
               />
               <div className="absolute bottom-0 right-0 p-3 sm:p-4 md:p-6 lg:p-8 pointer-events-none text-right">
-                <p className="text-xs sm:text-sm font-mono text-white/40">Click a repository to analyze</p>
+                <p className="text-xs sm:text-sm font-mono text-white/40">Tap a repository to analyze</p>
                 <p className="text-xs sm:text-sm font-mono text-white/40 hidden sm:block">Hover to see repository names</p>
-                <p className="text-xs sm:text-sm font-mono text-white/40 sm:hidden">Tap to see details</p>
+                <p className="text-xs sm:text-sm font-mono text-white/40">Pinch to zoom | Drag to rotate</p>
               </div>
             </>
           )}
@@ -185,9 +185,9 @@ const App: React.FC = () => {
                 Back to Constellation
               </button>
               <div className="absolute bottom-0 right-0 p-3 sm:p-4 md:p-6 lg:p-8 pointer-events-none text-right">
-                <p className="text-xs sm:text-sm font-mono text-white/40">Click a node to inspect</p>
+                <p className="text-xs sm:text-sm font-mono text-white/40">Tap a node to inspect</p>
                 <p className="text-xs sm:text-sm font-mono text-white/40 hidden sm:block">Drag to rotate | Scroll to zoom</p>
-                <p className="text-xs sm:text-sm font-mono text-white/40 sm:hidden">Drag & scroll to navigate</p>
+                <p className="text-xs sm:text-sm font-mono text-white/40 sm:hidden">Drag to rotate | Pinch to zoom</p>
               </div>
             </>
           )}

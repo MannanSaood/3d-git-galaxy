@@ -53,6 +53,26 @@ const ConstellationCanvas: React.FC<ConstellationCanvasProps> = ({ repos, onRepo
     controls.enableDamping = true;
     controls.autoRotate = true;
     controls.autoRotateSpeed = 0.5;
+    
+    // Enhanced touch controls for mobile devices
+    controls.enablePan = true;
+    controls.enableZoom = true;
+    controls.enableRotate = true;
+    controls.zoomSpeed = 1.2;
+    controls.minDistance = 10;
+    controls.maxDistance = 60;
+    controls.rotateSpeed = 0.8;
+    controls.panSpeed = 0.8;
+    
+    // Auto-rotate stops on user interaction
+    controls.addEventListener('start', () => {
+      controls.autoRotate = false;
+    });
+    controls.addEventListener('end', () => {
+      setTimeout(() => {
+        controls.autoRotate = true;
+      }, 2000);
+    });
 
     // Post-processing
     const renderScene = new RenderPass(scene, camera);

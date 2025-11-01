@@ -5,19 +5,26 @@ import RepoInputForm from './components/RepoInputForm';
 import Loader from './components/Loader';
 import Header from './components/Header';
 import ConstellationCanvas from './components/ConstellationCanvas';
-import type { CommitNode, RepoData, User, ConstellationRepo } from './types';
+import AnalyticsPanel from './components/AnalyticsPanel';
+import type { CommitNode, RepoData, User, ConstellationRepo, Author } from './types';
 
 const App: React.FC = () => {
   const [selectedCommit, setSelectedCommit] = useState<{ hash: string, node: CommitNode } | null>(null);
   const [repoData, setRepoData] = useState<RepoData | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [currentRepoUrl, setCurrentRepoUrl] = useState<string | null>(null);
   
   // New state for authentication and constellation view
   const [view, setView] = useState<'constellation' | 'detail'>('constellation');
   const [authState, setAuthState] = useState<'loading' | 'authenticated' | 'unauthenticated'>('loading');
   const [user, setUser] = useState<User | null>(null);
   const [userRepos, setUserRepos] = useState<ConstellationRepo[]>([]);
+  
+  // Phase 6: Analytics state
+  const [authors, setAuthors] = useState<Author[]>([]);
+  const [filteredAuthor, setFilteredAuthor] = useState<string | null>(null);
+  const [timelineCommitLimit, setTimelineCommitLimit] = useState<number | null>(null);
 
   // Check authentication status on mount
   useEffect(() => {
@@ -79,12 +86,69 @@ const App: React.FC = () => {
         throw new Error(errorData.message || 'Failed to analyze repository');
       }
 
-      const data: RepoData = await response.json();
-      setRepoData(data);
-      setView('detail');
+      const responseData = await response.json();
+      
+      // Phase 8: Check if we got a job ID (202 response)
+      if (response.status === 202 && responseData.jobId) {
+        // Poll for job status
+        const pollInterval = setInterval(async () => {
+          try {
+            const statusResponse = await fetch(`/api/job/${responseData.jobId}/status`, {
+              credentials: 'include'
+            });
+            
+            if (!statusResponse.ok) {
+              clearInterval(pollInterval);
+              setIsLoading(false);
+              setError('Failed to check job status');
+              return;
+            }
+            
+            const status = await statusResponse.json();
+            
+            if (status.status === 'complete') {
+              clearInterval(pollInterval);
+              const data = status.result;
+              setRepoData(data.repoData || data);
+              setAuthors(data.authors || []);
+              setCurrentRepoUrl(repoUrl);
+              setFilteredAuthor(null);
+              setTimelineCommitLimit(null);
+              setView('detail');
+              setIsLoading(false);
+            } else if (status.status === 'failed') {
+              clearInterval(pollInterval);
+              setIsLoading(false);
+              setError(status.error || 'Analysis failed');
+            }
+            // Continue polling if status is 'pending' or 'processing'
+          } catch (err) {
+            clearInterval(pollInterval);
+            setIsLoading(false);
+            setError('Failed to poll job status');
+          }
+        }, 1000); // Poll every second
+        
+        // Timeout after 5 minutes
+        setTimeout(() => {
+          clearInterval(pollInterval);
+          if (isLoading) {
+            setIsLoading(false);
+            setError('Analysis timed out');
+          }
+        }, 5 * 60 * 1000);
+      } else {
+        // Immediate response (cached data)
+        setRepoData(responseData.repoData || responseData);
+        setAuthors(responseData.authors || []);
+        setCurrentRepoUrl(repoUrl);
+        setFilteredAuthor(null);
+        setTimelineCommitLimit(null);
+        setView('detail');
+        setIsLoading(false);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An unknown error occurred');
-    } finally {
       setIsLoading(false);
     }
   };
@@ -126,12 +190,25 @@ const App: React.FC = () => {
               <GitGalaxyCanvas 
                 repoData={repoData} 
                 onCommitSelect={setSelectedCommit} 
-                selectedCommit={selectedCommit} 
+                selectedCommit={selectedCommit}
+                filteredAuthor={filteredAuthor}
+                timelineCommitLimit={timelineCommitLimit}
               />
               <CommitInfoPanel 
                 commit={selectedCommit} 
-                onClose={() => setSelectedCommit(null)} 
+                onClose={() => setSelectedCommit(null)}
+                repoUrl={currentRepoUrl || undefined}
               />
+              {repoData && authors.length > 0 && (
+                <AnalyticsPanel
+                  authors={authors}
+                  commitCount={Object.keys(repoData).length}
+                  filteredAuthor={filteredAuthor}
+                  timelineCommitLimit={timelineCommitLimit}
+                  onAuthorFilterChange={setFilteredAuthor}
+                  onTimelineChange={setTimelineCommitLimit}
+                />
+              )}
               <button
                 onClick={() => {
                   setView('constellation');
@@ -168,12 +245,25 @@ const App: React.FC = () => {
               <GitGalaxyCanvas 
                 repoData={repoData} 
                 onCommitSelect={setSelectedCommit} 
-                selectedCommit={selectedCommit} 
+                selectedCommit={selectedCommit}
+                filteredAuthor={filteredAuthor}
+                timelineCommitLimit={timelineCommitLimit}
               />
               <CommitInfoPanel 
                 commit={selectedCommit} 
-                onClose={() => setSelectedCommit(null)} 
+                onClose={() => setSelectedCommit(null)}
+                repoUrl={currentRepoUrl || undefined}
               />
+              {repoData && authors.length > 0 && (
+                <AnalyticsPanel
+                  authors={authors}
+                  commitCount={Object.keys(repoData).length}
+                  filteredAuthor={filteredAuthor}
+                  timelineCommitLimit={timelineCommitLimit}
+                  onAuthorFilterChange={setFilteredAuthor}
+                  onTimelineChange={setTimelineCommitLimit}
+                />
+              )}
               <button
                 onClick={() => {
                   setView('constellation');

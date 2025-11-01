@@ -32,8 +32,8 @@ export const initScene = (canvas: HTMLCanvasElement) => {
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   controls.autoRotate = true;
-  controls.autoRotateSpeed = 0.5;
-  
+  controls.autoRotateSpeed = 0.1; // Very subtle rotation (was 0.5)
+
   // Enhanced touch controls for mobile devices
   controls.enablePan = true;
   controls.enableZoom = true;
@@ -49,7 +49,6 @@ export const initScene = (canvas: HTMLCanvasElement) => {
   controls.panSpeed = 0.8;
   
   // Auto-rotate stops on user interaction
-  controls.autoRotate = true;
   controls.addEventListener('start', () => {
     controls.autoRotate = false;
   });
@@ -83,6 +82,7 @@ export const initScene = (canvas: HTMLCanvasElement) => {
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     
     composer.setSize(sizes.width, sizes.height);
+    bloomPass.setSize(sizes.width, sizes.height);
   };
 
   return { scene, camera, renderer, controls, composer, handleResize };

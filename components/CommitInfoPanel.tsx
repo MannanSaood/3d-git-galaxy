@@ -1,12 +1,34 @@
-import React from 'react';
-import type { CommitNode } from '../types';
+import React, { useState, useEffect } from 'react';
+import type { CommitNode, DiffStat } from '../types';
 
 interface CommitInfoPanelProps {
   commit: { hash: string, node: CommitNode } | null;
   onClose: () => void;
+  repoUrl?: string;
 }
 
-const CommitInfoPanel: React.FC<CommitInfoPanelProps> = ({ commit, onClose }) => {
+const CommitInfoPanel: React.FC<CommitInfoPanelProps> = ({ commit, onClose, repoUrl }) => {
+  const [diffStat, setDiffStat] = useState<DiffStat | null>(null);
+  const [loadingDiff, setLoadingDiff] = useState(false);
+
+  useEffect(() => {
+    if (commit && repoUrl) {
+      setLoadingDiff(true);
+      fetch(`/api/repo/commit/${commit.hash}/diff?repoUrl=${encodeURIComponent(repoUrl)}`)
+        .then(res => res.json())
+        .then(data => {
+          setDiffStat(data);
+          setLoadingDiff(false);
+        })
+        .catch(err => {
+          console.error('Failed to fetch diff:', err);
+          setLoadingDiff(false);
+        });
+    } else {
+      setDiffStat(null);
+    }
+  }, [commit, repoUrl]);
+
   if (!commit) {
     return null;
   }
@@ -28,9 +50,47 @@ const CommitInfoPanel: React.FC<CommitInfoPanelProps> = ({ commit, onClose }) =>
           &times;
         </button>
       </div>
+      
+      {/* Author */}
+      {commit.node.author && (
+        <div className="mt-3 sm:mt-4 pt-3 sm:pt-4 border-t border-white/10">
+          <p className="text-xs sm:text-sm text-white/70 uppercase tracking-wider mb-1">Author</p>
+          <p className="text-xs sm:text-sm text-cyan-300/90">{commit.node.author}</p>
+        </div>
+      )}
+      
+      {/* Commit Message */}
       <div className="mt-3 sm:mt-4 pt-3 sm:pt-4 border-t border-white/10">
+        <p className="text-xs sm:text-sm text-white/70 uppercase tracking-wider mb-1">Message</p>
         <p className="text-xs sm:text-sm text-white/90 break-words">{commit.node.message}</p>
       </div>
+      
+      {/* Diff Statistics */}
+      {diffStat && (
+        <div className="mt-3 sm:mt-4 pt-3 sm:pt-4 border-t border-white/10">
+          <p className="text-xs sm:text-sm text-white/70 uppercase tracking-wider mb-2">Changes</p>
+          <div className="flex flex-wrap gap-3 sm:gap-4">
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs sm:text-sm text-green-400">{diffStat.filesChanged}</span>
+              <span className="text-xs text-white/60">files</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs sm:text-sm text-green-400">+{diffStat.insertions}</span>
+              <span className="text-xs text-white/60">insertions</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs sm:text-sm text-red-400">-{diffStat.deletions}</span>
+              <span className="text-xs text-white/60">deletions</span>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {loadingDiff && (
+        <div className="mt-3 sm:mt-4 pt-3 sm:pt-4 border-t border-white/10">
+          <p className="text-xs text-white/50">Loading diff statistics...</p>
+        </div>
+      )}
     </div>
   );
 };

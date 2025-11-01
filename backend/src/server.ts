@@ -77,7 +77,7 @@ const calculateConstellationLayout = (repos: any[]): any[] => {
 };
 
 // A simple layout algorithm for the git graph
-const calculateLayout = (commits: Map<string, { parentHashes: string[], message: string }>): RepoData => {
+const calculateLayout = (commits: Map<string, { parentHashes: string[], message: string, author: string }>): RepoData => {
     const repoData: RepoData = {};
     const processedCommits = new Set<string>();
     
@@ -127,7 +127,8 @@ const calculateLayout = (commits: Map<string, { parentHashes: string[], message:
         repoData[hash] = {
             pos: [x, currentY, z],
             parent: commitData.parentHashes.length > 0 ? commitData.parentHashes[0] : null,
-            message: commitData.message
+            message: commitData.message,
+            author: commitData.author
         };
 
         const commitChildren = children.get(hash) || [];
@@ -348,8 +349,8 @@ app.post('/api/analyze', async (req: express.Request, res: express.Response) => 
         });
 
         const logOutput = await new Promise<string>((resolve, reject) => {
-            // Using a simple format: hash|parent_hashes|message
-            const format = `"%H|%P|%s"`;
+            // Format: hash|parent_hashes|author_name|message
+            const format = `"%H|%P|%an|%s"`;
             exec(`git log --pretty=format:${format}`, { cwd: tempDir }, (error, stdout, stderr) => {
                 if (error) {
                      console.error(`Log error: ${stderr}`);
@@ -359,11 +360,12 @@ app.post('/api/analyze', async (req: express.Request, res: express.Response) => 
             });
         });
 
-        const commits = new Map<string, { parentHashes: string[], message: string }>();
+        const commits = new Map<string, { parentHashes: string[], message: string, author: string }>();
         logOutput.split('\n').filter(line => line.length > 0).forEach(line => {
-            const [hash, parentHashesStr, message] = line.split('|');
+            const [hash, parentHashesStr, author, ...messageParts] = line.split('|');
             const parentHashes = parentHashesStr ? parentHashesStr.split(' ') : [];
-            commits.set(hash, { parentHashes, message });
+            const message = messageParts.join('|'); // In case message contains |
+            commits.set(hash, { parentHashes, message, author: author || 'Unknown' });
         });
 
         if (commits.size === 0) {
@@ -391,12 +393,12 @@ const buildPath = path.join(__dirname, '../../../dist');
   try {
     await fs.access(buildPath);
     // Build directory exists, serve static files
-    app.use(express.static(buildPath));
+app.use(express.static(buildPath));
 
     // The "catchall" handler - send all non-API requests to React app
-    app.get('*', (req: express.Request, res: express.Response) => {
-      res.sendFile(path.join(buildPath, 'index.html'));
-    });
+app.get('*', (req: express.Request, res: express.Response) => {
+  res.sendFile(path.join(buildPath, 'index.html'));
+});
     console.log('Serving static files from:', buildPath);
   } catch (error) {
     // Build directory doesn't exist (development mode)

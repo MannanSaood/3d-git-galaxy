@@ -13,12 +13,12 @@ export const addAtmosphericEffects = (scene: THREE.Scene) => {
 
   const particlesMaterial = new THREE.PointsMaterial({
     color: 0xffffff,
-    size: 0.1,
+    size: 0.08, // Slightly smaller to reduce bloom contribution
     sizeAttenuation: true,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
     transparent: true,
-    opacity: 0.5,
+    opacity: 0.3, // Reduced opacity to minimize bloom trail
   });
 
   const particles = new THREE.Points(particlesGeometry, particlesMaterial);

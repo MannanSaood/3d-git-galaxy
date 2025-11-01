@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { RepoData } from '../../types';
+import type { RepoData, PullRequest } from '../../types';
 
 export const buildGraph = (scene: THREE.Scene, repoData: RepoData) => {
   const commitPositions: number[] = [];
@@ -38,7 +38,7 @@ export const buildGraph = (scene: THREE.Scene, repoData: RepoData) => {
   const stars = new THREE.Points(pointsGeometry, pointsMaterial);
   commitObjects.add(stars);
 
-  // Create Branches (Lines)
+  // Create Branches (Lines) - Reverted to original implementation to prevent artifacts
   for (const hash of commitHashes) {
     const commit = repoData[hash];
     if (commit.parent && repoData[commit.parent]) {
@@ -63,4 +63,73 @@ export const buildGraph = (scene: THREE.Scene, repoData: RepoData) => {
   scene.add(branchObjects);
 
   return { stars };
+};
+
+// Phase 7: Build Pull Request visualizations
+export const buildPullRequests = (
+  scene: THREE.Scene,
+  prData: PullRequest[],
+  repoData: RepoData
+) => {
+  const prGroup = new THREE.Group();
+  
+  prData.forEach((pr) => {
+    const headCommit = repoData[pr.headSha];
+    const baseCommit = repoData[pr.baseSha];
+    
+    if (!headCommit || !baseCommit) {
+      return; // Skip if commits not found
+    }
+    
+    const headPos = new THREE.Vector3(...headCommit.pos);
+    const basePos = new THREE.Vector3(...baseCommit.pos);
+    
+    const curve = new THREE.LineCurve3(basePos, headPos);
+    const tubeGeometry = new THREE.TubeGeometry(curve, 20, 0.03, 8, false);
+    
+    // Color based on PR state
+    let color: THREE.Color;
+    if (pr.state === 'merged') {
+      color = new THREE.Color(0x00ff00); // Green for merged
+    } else if (pr.state === 'open') {
+      color = new THREE.Color(0x00ffff); // Cyan for open (will pulse)
+    } else {
+      color = new THREE.Color(0xff0000); // Red for closed
+    }
+    
+    const material = new THREE.MeshBasicMaterial({
+      color: color,
+      transparent: true,
+      opacity: 0.7
+    });
+    
+    const tube = new THREE.Mesh(tubeGeometry, material);
+    
+    // Add pulsing animation for open PRs
+    if (pr.state === 'open') {
+      const animate = () => {
+        const time = Date.now() * 0.001;
+        material.opacity = 0.5 + Math.sin(time * 2) * 0.3;
+        requestAnimationFrame(animate);
+      };
+      animate();
+    }
+    
+    prGroup.add(tube);
+    
+    // Add comment/review indicator sprite at midpoint
+    const midpoint = new THREE.Vector3().addVectors(basePos, headPos).multiplyScalar(0.5);
+    const spriteMaterial = new THREE.SpriteMaterial({
+      color: color,
+      transparent: true,
+      opacity: 0.8
+    });
+    const sprite = new THREE.Sprite(spriteMaterial);
+    sprite.position.copy(midpoint);
+    sprite.scale.set(0.1, 0.1, 1);
+    prGroup.add(sprite);
+  });
+  
+  scene.add(prGroup);
+  return { prGroup };
 };

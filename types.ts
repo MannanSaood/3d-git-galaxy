@@ -2,6 +2,8 @@ export interface CommitNode {
   pos: [number, number, number];
   parent: string | null;
   message: string;
+  author: string;
+  branchColor?: string;
 }
 
 export interface RepoData {
@@ -19,4 +21,23 @@ export interface ConstellationRepo {
 export interface User {
   login: string;
   avatar_url: string;
+}
+
+export interface DiffStat {
+  filesChanged: number;
+  insertions: number;
+  deletions: number;
+}
+
+export interface Author {
+  name: string;
+  commitCount: number;
+}
+
+export interface PullRequest {
+  id: number;
+  title: string;
+  state: 'open' | 'merged' | 'closed';
+  headSha: string;
+  baseSha: string;
 }

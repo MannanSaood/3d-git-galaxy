@@ -8,6 +8,7 @@ import os from 'os';
 import type { RepoData, CommitNode } from './types';
 import { fileURLToPath } from 'url';
 import session from 'express-session';
+import connectPgSimple from 'connect-pg-simple';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
 import { GoogleGenerativeAI } from '@google/generative-ai';
@@ -84,12 +85,41 @@ console.log('[SESSION CONFIG]', {
     hasSessionSecret: !!process.env.SESSION_SECRET,
     sessionSecretLength: SESSION_SECRET.length,
     nodeEnv: process.env.NODE_ENV,
-    port: PORT
+    port: PORT,
+    hasDatabaseUrl: !!DATABASE_URL
 });
 
+// Configure session store - use PostgreSQL if available, otherwise MemoryStore (dev only)
+let sessionStore: any;
+if (DATABASE_URL && isProduction) {
+    // Use PostgreSQL session store in production
+    console.log('[SESSION STORE] Using PostgreSQL session store');
+    try {
+        const PgSessionStore = connectPgSimple(session);
+        sessionStore = new PgSessionStore({
+            conString: DATABASE_URL,
+            tableName: 'user_sessions', // Table name for sessions
+            createTableIfMissing: true
+        });
+        console.log('[SESSION STORE] PostgreSQL session store initialized');
+    } catch (error) {
+        console.error('[SESSION STORE] Failed to initialize PostgreSQL store:', error);
+        console.log('[SESSION STORE] Falling back to MemoryStore');
+        sessionStore = new session.MemoryStore();
+    }
+} else {
+    // Use MemoryStore only for development (with warning)
+    console.log('[SESSION STORE] Using MemoryStore (development only - NOT for production!)');
+    if (isProduction) {
+        console.error('[SESSION STORE] WARNING: Using MemoryStore in production! This will cause session issues!');
+    }
+    sessionStore = new session.MemoryStore();
+}
+
 const sessionConfig: session.SessionOptions = {
+    store: sessionStore,
     secret: SESSION_SECRET,
-    resave: true, // Changed to true for better session persistence
+    resave: false, // PostgreSQL handles this
     saveUninitialized: false,
     rolling: true, // Reset expiration on every request
     name: 'gitgalaxy.sid', // Use a custom name instead of default 'connect.sid'
@@ -103,6 +133,7 @@ const sessionConfig: session.SessionOptions = {
 };
 
 app.use(session(sessionConfig));
+console.log('[SESSION] Middleware configured with', DATABASE_URL ? 'PostgreSQL store' : 'MemoryStore');
 
 // Log session middleware info
 app.use((req, res, next) => {

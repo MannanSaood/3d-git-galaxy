@@ -160,12 +160,12 @@ const App: React.FC = () => {
     }
     
     // If authenticated=true, wait a moment then refresh auth status
-    // This gives the session cookie time to be set
+    // This gives the session cookie time to be set and processed by browser
     if (authenticated === 'true') {
-      // Wait 500ms to ensure session cookie is set, then check auth status
+      // Increased delay to ensure cookie is fully set and server processed it
       setTimeout(() => {
         checkAuthStatus();
-      }, 500);
+      }, 1500); // Increased from 500ms to 1500ms for better reliability
       return; // Don't show error, wait for auth check
     }
     

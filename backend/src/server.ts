@@ -17,6 +17,9 @@ import { addJob, getJobStatus, updateJobStatus } from './jobQueue.js';
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Get DATABASE_URL for session config (same as database.ts uses)
+const DATABASE_URL = process.env.DATABASE_URL;
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -68,19 +71,27 @@ app.use(cors({
 }));
 app.use(express.json());
 
+// Trust proxy (required for Koyeb/cloud platforms with load balancers)
+app.set('trust proxy', 1);
+
 // Configure session middleware
 const isProduction = process.env.NODE_ENV === 'production';
-app.use(session({
+const sessionConfig: session.SessionOptions = {
     secret: process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex'),
-    resave: false,
+    resave: true, // Changed to true for better session persistence
     saveUninitialized: false,
+    rolling: true, // Reset expiration on every request
+    name: 'gitgalaxy.sid', // Use a custom name instead of default 'connect.sid'
     cookie: {
         secure: isProduction, // Use secure cookies in production (HTTPS required)
         httpOnly: true,
         maxAge: 24 * 60 * 60 * 1000, // 24 hours
-        sameSite: isProduction ? 'none' : 'lax' // 'none' for cross-origin in production, 'lax' for development
+        sameSite: isProduction ? 'none' : 'lax', // 'none' for cross-origin in production, 'lax' for development
+        // Don't set domain/path - let browser handle it for cross-origin
     }
-}));
+};
+
+app.use(session(sessionConfig));
 
 // Initialize Database (async)
 initDb().catch((err) => {
@@ -238,21 +249,41 @@ app.get('/api/auth/github', (req: express.Request, res: express.Response) => {
     
     // Generate random state string
     const state = crypto.randomBytes(32).toString('hex');
-    req.session.state = state;
     
-    // Save session before redirecting (important for cross-origin)
-    req.session.save((err) => {
+    // Regenerate session ID to prevent session fixation
+    req.session.regenerate((err) => {
         if (err) {
             if (process.env.NODE_ENV === 'development') {
-                console.error('Session save error:', err);
+                console.error('Session regenerate error:', err);
             }
             return res.status(500).send('Failed to initialize session');
         }
         
-        // GitHub authorization URL
-        const authUrl = `https://github.com/login/oauth/authorize?client_id=${GITHUB_CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=repo&state=${state}`;
+        // Set state after regeneration
+        req.session.state = state;
         
-        res.redirect(authUrl);
+        // Save session before redirecting (critical for cross-origin)
+        req.session.save((err) => {
+            if (err) {
+                if (process.env.NODE_ENV === 'development') {
+                    console.error('Session save error:', err);
+                }
+                return res.status(500).send('Failed to initialize session');
+            }
+            
+            // Explicitly set cookie header as backup
+            res.cookie('gitgalaxy.sid', req.sessionID, {
+                secure: isProduction,
+                httpOnly: true,
+                maxAge: 24 * 60 * 60 * 1000,
+                sameSite: isProduction ? 'none' : 'lax'
+            });
+            
+            // GitHub authorization URL
+            const authUrl = `https://github.com/login/oauth/authorize?client_id=${GITHUB_CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=repo&state=${state}`;
+            
+            res.redirect(authUrl);
+        });
     });
 });
 
@@ -363,6 +394,14 @@ app.get('/api/auth/github/callback', async (req: express.Request, res: express.R
                 const frontendUrl = (FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
                 return res.redirect(`${frontendUrl}?error=auth_failed`);
             }
+            
+            // Explicitly set cookie header as backup (should already be set by session middleware)
+            res.cookie('gitgalaxy.sid', req.sessionID, {
+                secure: isProduction,
+                httpOnly: true,
+                maxAge: 24 * 60 * 60 * 1000,
+                sameSite: isProduction ? 'none' : 'lax'
+            });
             
             // Redirect to frontend with success
             const frontendUrl = (FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');

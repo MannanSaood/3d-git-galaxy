@@ -52,7 +52,21 @@ async function initPostgres() {
             : false
     });
     
-    await pgClient.connect();
+    // Add error handlers to prevent crashes
+    pgClient.on('error', (err: Error) => {
+        console.error('[DATABASE] PostgreSQL client error:', err.message);
+        // Don't crash - connection will be retried on next query
+        // Reset client so it can reconnect
+        pgClient = null;
+    });
+    
+    try {
+        await pgClient.connect();
+    } catch (error: any) {
+        console.error('[DATABASE] Failed to connect to PostgreSQL:', error.message);
+        pgClient = null;
+        throw error;
+    }
     
     // Create repos table if it doesn't exist
     await pgClient.query(`

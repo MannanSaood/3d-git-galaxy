@@ -104,8 +104,21 @@ if (DATABASE_URL) {
             // Add connection error handling
             errorLog: (error: Error) => {
                 console.error('[SESSION STORE] PostgreSQL connection error:', error.message);
+                // Don't let this crash the app
             }
         });
+        
+        // Add error event handlers to session store
+        if (sessionStore && typeof (sessionStore as any).client === 'object') {
+            const client = (sessionStore as any).client;
+            if (client && typeof client.on === 'function') {
+                client.on('error', (err: Error) => {
+                    console.error('[SESSION STORE] PostgreSQL client error:', err.message);
+                    // Reset connection - it will retry on next operation
+                });
+            }
+        }
+        
         console.log('[SESSION STORE] PostgreSQL session store initialized successfully');
     } catch (error: any) {
         console.error('[SESSION STORE] Failed to initialize PostgreSQL store:', error.message || error);
@@ -147,11 +160,23 @@ console.log('[SESSION] Middleware configured with', DATABASE_URL ? 'PostgreSQL s
 // Handle unhandled PostgreSQL errors gracefully
 process.on('unhandledRejection', (reason: any, promise) => {
     if (reason?.code === '57P01' || reason?.code === 'ECONNRESET' || reason?.message?.includes('terminating connection')) {
-        console.error('[DATABASE] Connection terminated, but continuing...', reason.message || reason);
+        console.error('[DATABASE] Connection terminated (unhandled rejection), but continuing...', reason.message || reason);
         // Don't crash - this might be a temporary connection issue
         return;
     }
     console.error('[UNHANDLED REJECTION]', reason);
+});
+
+// Handle uncaught exceptions (like PostgreSQL client errors)
+process.on('uncaughtException', (error: Error) => {
+    if (error.message?.includes('terminating connection') || (error as any).code === '57P01') {
+        console.error('[DATABASE] Connection terminated (uncaught exception), but continuing...', error.message);
+        // Don't crash - connection will be retried
+        return;
+    }
+    console.error('[UNCAUGHT EXCEPTION]', error);
+    // For other errors, we might want to exit gracefully
+    // But for database connection errors, we'll continue
 });
 
 // Handle database connection errors in session store

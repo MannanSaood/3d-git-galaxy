@@ -1,0 +1,17 @@
+node_modules
+dist
+.git
+.env
+.env.local
+*.log
+.DS_Store
+coverage
+.vscode
+.idea
+*.md
+!README.md
+render.yaml
+.npmrc
+BUILD_FIX.md
+DEPLOY.md
+

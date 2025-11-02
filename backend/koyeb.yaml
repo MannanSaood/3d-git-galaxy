@@ -1,0 +1,29 @@
+name: 3d-git-galaxy-backend
+
+services:
+  - name: backend
+    type: web
+    build:
+      type: dockerfile
+      dockerfile_path: Dockerfile
+      dockerfile_context: .
+    ports:
+      - port: 3001
+        protocol: http
+    env:
+      - name: NODE_ENV
+        value: production
+      - name: PORT
+        value: "3001"
+    secrets:
+      - name: GITHUB_CLIENT_ID
+      - name: GITHUB_CLIENT_SECRET
+      - name: GEMINI_API_KEY
+      - name: SESSION_SECRET
+      - name: FRONTEND_URL
+      - name: REDIRECT_URI
+    volumes:
+      - path: /app/data
+        mount_path: data
+        size_gb: 1
+

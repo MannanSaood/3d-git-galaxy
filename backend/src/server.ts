@@ -48,14 +48,16 @@ app.use(cors({
 app.use(express.json());
 
 // Configure session middleware
+const isProduction = process.env.NODE_ENV === 'production';
 app.use(session({
     secret: process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex'),
     resave: false,
     saveUninitialized: false,
     cookie: {
-        secure: process.env.NODE_ENV === 'production',
+        secure: isProduction, // Use secure cookies in production (HTTPS required)
         httpOnly: true,
-        maxAge: 24 * 60 * 60 * 1000 // 24 hours
+        maxAge: 24 * 60 * 60 * 1000, // 24 hours
+        sameSite: isProduction ? 'none' : 'lax' // 'none' for cross-origin in production, 'lax' for development
     }
 }));
 
@@ -213,10 +215,20 @@ app.get('/api/auth/github', (req: express.Request, res: express.Response) => {
     const state = crypto.randomBytes(32).toString('hex');
     req.session.state = state;
     
-    // GitHub authorization URL
-    const authUrl = `https://github.com/login/oauth/authorize?client_id=${GITHUB_CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=repo&state=${state}`;
-    
-    res.redirect(authUrl);
+    // Save session before redirecting (important for cross-origin)
+    req.session.save((err) => {
+        if (err) {
+            if (process.env.NODE_ENV === 'development') {
+                console.error('Session save error:', err);
+            }
+            return res.status(500).send('Failed to initialize session');
+        }
+        
+        // GitHub authorization URL
+        const authUrl = `https://github.com/login/oauth/authorize?client_id=${GITHUB_CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=repo&state=${state}`;
+        
+        res.redirect(authUrl);
+    });
 });
 
 // GitHub OAuth: Handle callback
@@ -224,8 +236,29 @@ app.get('/api/auth/github/callback', async (req: express.Request, res: express.R
     const { code, state } = req.query;
     
     // Validate state
-    if (!state || state !== req.session.state) {
-        return res.status(400).send('Invalid state parameter');
+    if (!state) {
+        // Redirect to frontend with error if accessed directly
+        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+        return res.redirect(`${frontendUrl}?error=missing_state`);
+    }
+    
+    if (!req.session.state) {
+        // Session expired or not found - likely accessed directly or session lost
+        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+        return res.redirect(`${frontendUrl}?error=session_expired`);
+    }
+    
+    if (state !== req.session.state) {
+        // State mismatch - potential CSRF attack or session issue
+        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+        if (process.env.NODE_ENV === 'development') {
+            console.error('State mismatch:', {
+                received: state,
+                expected: req.session.state,
+                hasSession: !!req.session
+            });
+        }
+        return res.redirect(`${frontendUrl}?error=invalid_state`);
     }
     
     if (!code) {
@@ -275,8 +308,8 @@ app.get('/api/auth/github/callback', async (req: express.Request, res: express.R
         req.session.user = userData;
         req.session.state = undefined; // Clear state
         
-        // Redirect to frontend
-        res.redirect(FRONTEND_URL);
+        // Redirect to frontend with success
+        res.redirect(`${FRONTEND_URL}?authenticated=true`);
     } catch (error) {
         if (process.env.NODE_ENV === 'development') {
             console.error('OAuth callback error:', error);

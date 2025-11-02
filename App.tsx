@@ -113,6 +113,44 @@ const App: React.FC = () => {
     }
   }, [settings, selectedCommit, repoData]);
 
+  // Check for OAuth callback parameters and handle them
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const authenticated = urlParams.get('authenticated');
+    const error = urlParams.get('error');
+    
+    // Clean up URL parameters
+    if (authenticated || error) {
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+    
+    // If authenticated=true, refresh auth status
+    if (authenticated === 'true') {
+      // Will be handled by checkAuthStatus below
+    }
+    
+    // Handle errors
+    if (error) {
+      let errorMessage = 'Authentication failed';
+      switch (error) {
+        case 'missing_state':
+          errorMessage = 'Authentication error: Missing state parameter. Please try logging in again.';
+          break;
+        case 'session_expired':
+          errorMessage = 'Your session expired. Please try logging in again.';
+          break;
+        case 'invalid_state':
+          errorMessage = 'Security validation failed. Please try logging in again.';
+          break;
+        default:
+          errorMessage = `Authentication error: ${error}. Please try logging in again.`;
+      }
+      setError(errorMessage);
+      // Clear error after 5 seconds
+      setTimeout(() => setError(null), 5000);
+    }
+  }, []);
+
   // Check authentication status on mount
   useEffect(() => {
     const checkAuthStatus = async () => {

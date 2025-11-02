@@ -76,8 +76,19 @@ app.set('trust proxy', 1);
 
 // Configure session middleware
 const isProduction = process.env.NODE_ENV === 'production';
+const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+
+// Debug logging
+console.log('[SESSION CONFIG]', {
+    isProduction,
+    hasSessionSecret: !!process.env.SESSION_SECRET,
+    sessionSecretLength: SESSION_SECRET.length,
+    nodeEnv: process.env.NODE_ENV,
+    port: PORT
+});
+
 const sessionConfig: session.SessionOptions = {
-    secret: process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex'),
+    secret: SESSION_SECRET,
     resave: true, // Changed to true for better session persistence
     saveUninitialized: false,
     rolling: true, // Reset expiration on every request
@@ -92,6 +103,22 @@ const sessionConfig: session.SessionOptions = {
 };
 
 app.use(session(sessionConfig));
+
+// Log session middleware info
+app.use((req, res, next) => {
+    if (req.path === '/api/auth/github' || req.path === '/api/auth/github/callback' || req.path === '/api/auth/status') {
+        console.log(`[SESSION REQUEST] ${req.method} ${req.path}`, {
+            sessionId: req.sessionID,
+            hasSession: !!req.session,
+            hasState: !!(req.session && req.session.state),
+            hasAccessToken: !!(req.session && req.session.access_token),
+            cookies: req.headers.cookie ? req.headers.cookie.substring(0, 50) + '...' : 'none',
+            origin: req.headers.origin,
+            referer: req.headers.referer
+        });
+    }
+    next();
+});
 
 // Initialize Database (async)
 initDb().catch((err) => {
@@ -222,6 +249,15 @@ const GITHUB_CLIENT_SECRET = (process.env.GITHUB_CLIENT_SECRET || '').trim();
 const REDIRECT_URI = process.env.REDIRECT_URI || 'http://localhost:3001/api/auth/github/callback';
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
 
+// Debug OAuth configuration
+console.log('[OAUTH CONFIG]', {
+    hasClientId: !!process.env.GITHUB_CLIENT_ID,
+    hasClientSecret: !!process.env.GITHUB_CLIENT_SECRET,
+    redirectUri: REDIRECT_URI,
+    frontendUrl: FRONTEND_URL,
+    isProduction
+});
+
 // Declare session type for TypeScript
 declare module 'express-session' {
     interface SessionData {
@@ -233,6 +269,12 @@ declare module 'express-session' {
 
 // GitHub OAuth: Initiate authentication
 app.get('/api/auth/github', (req: express.Request, res: express.Response) => {
+    console.log('[OAUTH START] Request received', {
+        sessionId: req.sessionID,
+        hasExistingSession: !!req.session && Object.keys(req.session).length > 0,
+        ip: req.ip,
+        origin: req.headers.origin
+    });
     // Debug: Log whether credentials are loaded (without exposing secrets)
     if (!GITHUB_CLIENT_ID || !GITHUB_CLIENT_SECRET) {
         // GitHub OAuth not configured
@@ -249,94 +291,107 @@ app.get('/api/auth/github', (req: express.Request, res: express.Response) => {
     
     // Generate random state string
     const state = crypto.randomBytes(32).toString('hex');
+    console.log('[OAUTH START] Generated state:', state.substring(0, 8) + '...');
     
-    // Regenerate session ID to prevent session fixation
-    req.session.regenerate((err) => {
+    // Set state first (before regeneration to ensure it's in the session)
+    req.session.state = state;
+    
+    // Save session before redirecting (critical for cross-origin)
+    req.session.save((err) => {
         if (err) {
-            if (process.env.NODE_ENV === 'development') {
-                console.error('Session regenerate error:', err);
-            }
+            console.error('[OAUTH START] Session save error:', err);
             return res.status(500).send('Failed to initialize session');
         }
         
-        // Set state after regeneration
-        req.session.state = state;
-        
-        // Save session before redirecting (critical for cross-origin)
-        req.session.save((err) => {
-            if (err) {
-                if (process.env.NODE_ENV === 'development') {
-                    console.error('Session save error:', err);
-                }
-                return res.status(500).send('Failed to initialize session');
-            }
-            
-            // Explicitly set cookie header as backup
-            res.cookie('gitgalaxy.sid', req.sessionID, {
-                secure: isProduction,
-                httpOnly: true,
-                maxAge: 24 * 60 * 60 * 1000,
-                sameSite: isProduction ? 'none' : 'lax'
-            });
-            
-            // GitHub authorization URL
-            const authUrl = `https://github.com/login/oauth/authorize?client_id=${GITHUB_CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=repo&state=${state}`;
-            
-            res.redirect(authUrl);
+        console.log('[OAUTH START] Session saved successfully', {
+            sessionId: req.sessionID,
+            stateSet: !!req.session.state,
+            stateLength: req.session.state?.length || 0
         });
+        
+        // Explicitly set cookie header as backup
+        res.cookie('gitgalaxy.sid', req.sessionID, {
+            secure: isProduction,
+            httpOnly: true,
+            maxAge: 24 * 60 * 60 * 1000,
+            sameSite: isProduction ? 'none' : 'lax',
+            path: '/' // Explicit path
+        });
+        
+        // GitHub authorization URL
+        const authUrl = `https://github.com/login/oauth/authorize?client_id=${GITHUB_CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=repo&state=${state}`;
+        
+        console.log('[OAUTH START] Redirecting to GitHub', {
+            redirectUri: REDIRECT_URI,
+            stateLength: state.length
+        });
+        
+        res.redirect(authUrl);
     });
 });
 
 // GitHub OAuth: Handle callback
 app.get('/api/auth/github/callback', async (req: express.Request, res: express.Response) => {
     const { code, state } = req.query;
+    const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+    
+    console.log('[OAUTH CALLBACK] Request received', {
+        sessionId: req.sessionID,
+        hasCode: !!code,
+        hasState: !!state,
+        receivedState: state ? (state as string).substring(0, 8) + '...' : 'none',
+        hasSession: !!req.session,
+        sessionKeys: req.session ? Object.keys(req.session) : [],
+        sessionState: req.session?.state ? (req.session.state as string).substring(0, 8) + '...' : 'none',
+        cookies: req.headers.cookie ? req.headers.cookie.substring(0, 100) : 'none',
+        origin: req.headers.origin,
+        referer: req.headers.referer
+    });
     
     // Validate state
     if (!state) {
-        // Redirect to frontend with error if accessed directly
-        const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+        console.error('[OAUTH CALLBACK] Missing state in query');
         return res.redirect(`${frontendUrl}?error=missing_state`);
     }
     
-    if (!req.session || !req.session.state) {
-        // Session expired or not found - likely accessed directly or session lost
-        // This can happen if:
-        // 1. User visited callback URL directly without going through OAuth
-        // 2. Session cookie wasn't set/sent properly (CORS/cookie issues)
-        // 3. Session store cleared the session
-        
-        // Don't show error if there's no state in query either (direct visit)
-        if (!state) {
-            const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
-            return res.redirect(`${frontendUrl}?error=missing_state`);
-        }
-        
-        // If we have a state but no session, it's likely a session persistence issue
-        const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
-        if (process.env.NODE_ENV === 'development') {
-            console.error('Session state missing:', {
-                hasSession: !!req.session,
-                hasState: !!(req.session && req.session.state),
-                receivedState: state,
-                sessionId: req.sessionID
-            });
-        }
+    if (!req.session) {
+        console.error('[OAUTH CALLBACK] No session object found', {
+            sessionId: req.sessionID,
+            cookies: req.headers.cookie ? 'present' : 'missing'
+        });
+        return res.redirect(`${frontendUrl}?error=session_expired`);
+    }
+    
+    if (!req.session.state) {
+        console.error('[OAUTH CALLBACK] Session state missing', {
+            sessionId: req.sessionID,
+            hasSession: !!req.session,
+            sessionKeys: Object.keys(req.session),
+            sessionData: JSON.stringify(req.session).substring(0, 200),
+            receivedState: state,
+            cookies: req.headers.cookie ? req.headers.cookie.substring(0, 100) : 'none'
+        });
         return res.redirect(`${frontendUrl}?error=session_expired`);
     }
     
     if (state !== req.session.state) {
-        // State mismatch - potential CSRF attack or session issue
-        const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
-        if (process.env.NODE_ENV === 'development') {
-            console.error('State mismatch:', {
-                received: state,
-                expected: req.session.state,
-                hasSession: !!req.session,
-                sessionId: req.sessionID
-            });
-        }
+        console.error('[OAUTH CALLBACK] State mismatch', {
+            received: state,
+            expected: req.session.state,
+            receivedLength: (state as string).length,
+            expectedLength: req.session.state.length,
+            receivedStart: (state as string).substring(0, 16),
+            expectedStart: req.session.state.substring(0, 16),
+            sessionId: req.sessionID,
+            sessionKeys: Object.keys(req.session)
+        });
         return res.redirect(`${frontendUrl}?error=invalid_state`);
     }
+    
+    console.log('[OAUTH CALLBACK] State validated successfully', {
+        sessionId: req.sessionID,
+        stateMatch: true
+    });
     
     if (!code) {
         return res.status(400).send('Authorization code not provided');
@@ -385,26 +440,42 @@ app.get('/api/auth/github/callback', async (req: express.Request, res: express.R
         req.session.user = userData;
         req.session.state = undefined; // Clear state
         
+        console.log('[OAUTH CALLBACK] Storing auth data in session', {
+            sessionId: req.sessionID,
+            hasAccessToken: !!accessToken,
+            hasUser: !!userData,
+            userId: userData?.login || 'unknown'
+        });
+        
         // Save session before redirecting (critical for cross-origin)
         req.session.save((err) => {
             if (err) {
-                if (process.env.NODE_ENV === 'development') {
-                    console.error('Session save error after auth:', err);
-                }
+                console.error('[OAUTH CALLBACK] Session save error after auth:', err);
                 const frontendUrl = (FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
                 return res.redirect(`${frontendUrl}?error=auth_failed`);
             }
+            
+            console.log('[OAUTH CALLBACK] Session saved successfully', {
+                sessionId: req.sessionID,
+                willSetCookie: true
+            });
             
             // Explicitly set cookie header as backup (should already be set by session middleware)
             res.cookie('gitgalaxy.sid', req.sessionID, {
                 secure: isProduction,
                 httpOnly: true,
                 maxAge: 24 * 60 * 60 * 1000,
-                sameSite: isProduction ? 'none' : 'lax'
+                sameSite: isProduction ? 'none' : 'lax',
+                path: '/' // Explicit path
             });
             
             // Redirect to frontend with success
             const frontendUrl = (FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+            console.log('[OAUTH CALLBACK] Redirecting to frontend', {
+                frontendUrl,
+                sessionId: req.sessionID
+            });
+            
             res.redirect(`${frontendUrl}?authenticated=true`);
         });
     } catch (error) {
@@ -417,7 +488,17 @@ app.get('/api/auth/github/callback', async (req: express.Request, res: express.R
 
 // Check authentication status
 app.get('/api/auth/status', (req: express.Request, res: express.Response) => {
-    if (req.session.access_token && req.session.user) {
+    console.log('[AUTH STATUS] Checking authentication', {
+        sessionId: req.sessionID,
+        hasSession: !!req.session,
+        hasAccessToken: !!(req.session && req.session.access_token),
+        hasUser: !!(req.session && req.session.user),
+        sessionKeys: req.session ? Object.keys(req.session) : [],
+        cookies: req.headers.cookie ? req.headers.cookie.substring(0, 50) + '...' : 'none',
+        origin: req.headers.origin
+    });
+    
+    if (req.session && req.session.access_token && req.session.user) {
         res.json({
             authenticated: true,
             user: req.session.user

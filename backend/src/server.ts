@@ -91,27 +91,36 @@ console.log('[SESSION CONFIG]', {
 
 // Configure session store - use PostgreSQL if available, otherwise MemoryStore (dev only)
 let sessionStore: any;
-if (DATABASE_URL && isProduction) {
-    // Use PostgreSQL session store in production
-    console.log('[SESSION STORE] Using PostgreSQL session store');
+if (DATABASE_URL) {
+    // Use PostgreSQL session store if DATABASE_URL is available
+    console.log('[SESSION STORE] Attempting to use PostgreSQL session store');
+    console.log('[SESSION STORE] DATABASE_URL present:', DATABASE_URL.substring(0, 20) + '...');
     try {
         const PgSessionStore = connectPgSimple(session);
         sessionStore = new PgSessionStore({
             conString: DATABASE_URL,
             tableName: 'user_sessions', // Table name for sessions
-            createTableIfMissing: true
+            createTableIfMissing: true,
+            // Add connection error handling
+            errorLog: (error: Error) => {
+                console.error('[SESSION STORE] PostgreSQL connection error:', error.message);
+            }
         });
-        console.log('[SESSION STORE] PostgreSQL session store initialized');
-    } catch (error) {
-        console.error('[SESSION STORE] Failed to initialize PostgreSQL store:', error);
+        console.log('[SESSION STORE] PostgreSQL session store initialized successfully');
+    } catch (error: any) {
+        console.error('[SESSION STORE] Failed to initialize PostgreSQL store:', error.message || error);
         console.log('[SESSION STORE] Falling back to MemoryStore');
+        if (isProduction) {
+            console.error('[SESSION STORE] WARNING: Using MemoryStore in production! Sessions will not persist!');
+        }
         sessionStore = new session.MemoryStore();
     }
 } else {
     // Use MemoryStore only for development (with warning)
-    console.log('[SESSION STORE] Using MemoryStore (development only - NOT for production!)');
+    console.log('[SESSION STORE] Using MemoryStore (no DATABASE_URL found)');
     if (isProduction) {
         console.error('[SESSION STORE] WARNING: Using MemoryStore in production! This will cause session issues!');
+        console.error('[SESSION STORE] Please set DATABASE_URL environment variable!');
     }
     sessionStore = new session.MemoryStore();
 }
@@ -134,6 +143,27 @@ const sessionConfig: session.SessionOptions = {
 
 app.use(session(sessionConfig));
 console.log('[SESSION] Middleware configured with', DATABASE_URL ? 'PostgreSQL store' : 'MemoryStore');
+
+// Handle unhandled PostgreSQL errors gracefully
+process.on('unhandledRejection', (reason: any, promise) => {
+    if (reason?.code === '57P01' || reason?.code === 'ECONNRESET' || reason?.message?.includes('terminating connection')) {
+        console.error('[DATABASE] Connection terminated, but continuing...', reason.message || reason);
+        // Don't crash - this might be a temporary connection issue
+        return;
+    }
+    console.error('[UNHANDLED REJECTION]', reason);
+});
+
+// Handle database connection errors in session store
+if (sessionStore && typeof sessionStore.on === 'function') {
+    sessionStore.on('connect', () => {
+        console.log('[SESSION STORE] Connected to PostgreSQL');
+    });
+    sessionStore.on('error', (error: Error) => {
+        console.error('[SESSION STORE] Error:', error.message);
+        // Don't crash - fallback to memory-based behavior
+    });
+}
 
 // Log session middleware info
 app.use((req, res, next) => {

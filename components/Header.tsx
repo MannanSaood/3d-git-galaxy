@@ -47,12 +47,19 @@ const Header: React.FC<HeaderProps> = ({ authState, user, onLogout, onSearchRepo
     <div className="absolute top-0 left-0 right-0 z-50 p-3 sm:p-4 md:p-6 lg:p-8 pointer-events-none">
       {/* Single row: Title (left), Search input (center), Login/Avatar (right) */}
       <div className="flex items-center justify-between gap-2 sm:gap-3 md:gap-4 w-full">
-        {/* Title on left */}
-        <div className="flex-shrink-0">
-          <h1 className="text-xl sm:text-2xl md:text-3xl lg:text-4xl font-mono text-cyan-300/80 tracking-widest whitespace-nowrap">3D Git Galaxy</h1>
-          {authState === 'unauthenticated' && (
-            <p className="text-xs sm:text-sm md:text-base font-mono text-white/60 mt-1 sm:mt-2 hidden sm:block">Visualize a public Git repository</p>
-          )}
+        {/* Title on left with logo */}
+        <div className="flex-shrink-0 flex items-center gap-2 sm:gap-3">
+          <img 
+            src="/3dgitgalaxy.png" 
+            alt="3D Git Galaxy Logo" 
+            className="w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 lg:w-14 lg:h-14 flex-shrink-0 pointer-events-auto"
+          />
+          <div>
+            <h1 className="text-xl sm:text-2xl md:text-3xl lg:text-4xl font-mono text-cyan-300/80 tracking-widest whitespace-nowrap">3D Git Galaxy</h1>
+            {authState === 'unauthenticated' && (
+              <p className="text-xs sm:text-sm md:text-base font-mono text-white/60 mt-1 sm:mt-2 hidden sm:block">Visualize a public Git repository</p>
+            )}
+          </div>
         </div>
         
         {/* Search input in center */}

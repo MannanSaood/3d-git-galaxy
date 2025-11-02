@@ -43,7 +43,8 @@ async function initSqlite() {
 async function initPostgres() {
     if (pgClient) return pgClient;
     
-    const { Client } = await import('pg');
+    const pg = await import('pg');
+    const { Client } = pg;
     pgClient = new Client({
         connectionString: DATABASE_URL,
         ssl: DATABASE_URL?.includes('koyeb.app') || DATABASE_URL?.includes('amazonaws.com') || DATABASE_URL?.includes('googleapis.com') || DATABASE_URL?.includes('render.com') || DATABASE_URL?.includes('supabase.co')

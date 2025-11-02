@@ -1,7 +1,32 @@
 import * as THREE from 'three';
-import type { RepoData, PullRequest } from '../../types';
+import type { RepoData, PullRequest, Settings } from '../../types';
 
-export const buildGraph = (scene: THREE.Scene, repoData: RepoData) => {
+// Theme color palettes
+const themePalettes: Record<string, THREE.Color[]> = {
+  cyberpunk: [
+    new THREE.Color(0xff00ff), // Magenta
+    new THREE.Color(0x00ffff), // Cyan
+    new THREE.Color(0xffff00), // Yellow
+    new THREE.Color(0xff0080), // Hot Pink
+    new THREE.Color(0x00ff80), // Bright Green
+  ],
+  forest: [
+    new THREE.Color(0x228b22), // Forest Green
+    new THREE.Color(0x90ee90), // Light Green
+    new THREE.Color(0x3cb371), // Medium Sea Green
+    new THREE.Color(0x556b2f), // Dark Olive Green
+    new THREE.Color(0x6b8e23), // Olive Drab
+  ],
+  solarized: [
+    new THREE.Color(0x268bd2), // Blue
+    new THREE.Color(0x2aa198), // Cyan
+    new THREE.Color(0x859900), // Green
+    new THREE.Color(0xb58900), // Yellow
+    new THREE.Color(0xcb4b16), // Orange
+  ],
+};
+
+export const buildGraph = (scene: THREE.Scene, repoData: RepoData, settings: Settings) => {
   const commitPositions: number[] = [];
   const commitObjects = new THREE.Group();
   const branchObjects = new THREE.Group();
@@ -38,7 +63,10 @@ export const buildGraph = (scene: THREE.Scene, repoData: RepoData) => {
   const stars = new THREE.Points(pointsGeometry, pointsMaterial);
   commitObjects.add(stars);
 
-  // Create Branches (Lines) - Reverted to original implementation to prevent artifacts
+  // Create Branches (Lines) - Use theme-based colors
+  const palette = themePalettes[settings.theme] || themePalettes.cyberpunk;
+  let branchIndex = 0;
+  
   for (const hash of commitHashes) {
     const commit = repoData[hash];
     if (commit.parent && repoData[commit.parent]) {
@@ -49,13 +77,15 @@ export const buildGraph = (scene: THREE.Scene, repoData: RepoData) => {
       const curve = new THREE.LineCurve3(startVec, endVec);
       const tubeGeometry = new THREE.TubeGeometry(curve, 20, 0.02, 8, false);
       
-      const branchColor = new THREE.Color(0xffffff).setHSL(Math.random(), 0.7, 0.6);
+      // Select color from theme palette based on branch index
+      const branchColor = palette[branchIndex % palette.length].clone();
       const tubeMaterial = new THREE.MeshBasicMaterial({
         color: branchColor,
       });
 
       const tube = new THREE.Mesh(tubeGeometry, tubeMaterial);
       branchObjects.add(tube);
+      branchIndex++;
     }
   }
 
@@ -72,6 +102,7 @@ export const buildPullRequests = (
   repoData: RepoData
 ) => {
   const prGroup = new THREE.Group();
+  const animatedMaterials: THREE.MeshBasicMaterial[] = [];
   
   prData.forEach((pr) => {
     const headCommit = repoData[pr.headSha];
@@ -105,14 +136,9 @@ export const buildPullRequests = (
     
     const tube = new THREE.Mesh(tubeGeometry, material);
     
-    // Add pulsing animation for open PRs
+    // Track animated materials (animation will be handled in main render loop)
     if (pr.state === 'open') {
-      const animate = () => {
-        const time = Date.now() * 0.001;
-        material.opacity = 0.5 + Math.sin(time * 2) * 0.3;
-        requestAnimationFrame(animate);
-      };
-      animate();
+      animatedMaterials.push(material);
     }
     
     prGroup.add(tube);
@@ -131,5 +157,5 @@ export const buildPullRequests = (
   });
   
   scene.add(prGroup);
-  return { prGroup };
+  return { prGroup, animatedMaterials };
 };

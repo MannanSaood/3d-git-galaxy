@@ -6,7 +6,8 @@ import Loader from './components/Loader';
 import Header from './components/Header';
 import ConstellationCanvas from './components/ConstellationCanvas';
 import AnalyticsPanel from './components/AnalyticsPanel';
-import type { CommitNode, RepoData, User, ConstellationRepo, Author } from './types';
+import type { CommitNode, RepoData, User, ConstellationRepo, Author, Settings, PullRequest } from './types';
+import CustomizationPanel from './components/CustomizationPanel';
 
 const App: React.FC = () => {
   const [selectedCommit, setSelectedCommit] = useState<{ hash: string, node: CommitNode } | null>(null);
@@ -25,6 +26,91 @@ const App: React.FC = () => {
   const [authors, setAuthors] = useState<Author[]>([]);
   const [filteredAuthor, setFilteredAuthor] = useState<string | null>(null);
   const [timelineCommitLimit, setTimelineCommitLimit] = useState<number | null>(null);
+
+  // Phase 7: Pull Requests state
+  const [pullRequests, setPullRequests] = useState<PullRequest[]>([]);
+
+  // Phase 9: Settings and customization
+  const [settings, setSettings] = useState<Settings>({
+    theme: 'cyberpunk',
+    bloomStrength: 1.7,
+    autoRotateSpeed: 0.1,
+  });
+  const [isPanelOpen, setIsPanelOpen] = useState(false);
+
+  // Phase 9: Load settings from URL hash on mount
+  useEffect(() => {
+    const hash = window.location.hash.slice(1); // Remove #
+    if (hash) {
+      const params = new URLSearchParams(hash);
+      
+      // Load theme
+      const theme = params.get('theme');
+      if (theme === 'cyberpunk' || theme === 'forest' || theme === 'solarized') {
+        setSettings(prev => ({ ...prev, theme }));
+      }
+      
+      // Load bloom strength
+      const bloom = params.get('bloom');
+      if (bloom) {
+        const bloomValue = parseFloat(bloom);
+        if (!isNaN(bloomValue) && bloomValue >= 0.5 && bloomValue <= 3.0) {
+          setSettings(prev => ({ ...prev, bloomStrength: bloomValue }));
+        }
+      }
+      
+      // Load auto rotate speed
+      const rotate = params.get('rotate');
+      if (rotate) {
+        const rotateValue = parseFloat(rotate);
+        if (!isNaN(rotateValue) && rotateValue >= 0.0 && rotateValue <= 2.0) {
+          setSettings(prev => ({ ...prev, autoRotateSpeed: rotateValue }));
+        }
+      }
+    }
+  }, []); // Only run on mount
+
+  // Phase 9: Load selected commit from URL hash when repoData is available
+  useEffect(() => {
+    if (!repoData) return;
+    
+    const hash = window.location.hash.slice(1);
+    if (hash) {
+      const params = new URLSearchParams(hash);
+      const commit = params.get('commit');
+      if (commit && repoData[commit] && !selectedCommit) {
+        setSelectedCommit({ hash: commit, node: repoData[commit] });
+      }
+    }
+  }, [repoData]); // Run when repoData changes
+
+  // Phase 9: Update URL hash when settings or selected commit changes
+  useEffect(() => {
+    // Only update if we have repoData loaded (to avoid premature updates)
+    if (!repoData) return;
+    
+    const params = new URLSearchParams();
+    
+    if (settings.theme !== 'cyberpunk') {
+      params.set('theme', settings.theme);
+    }
+    if (settings.bloomStrength !== 1.7) {
+      params.set('bloom', settings.bloomStrength.toString());
+    }
+    if (settings.autoRotateSpeed !== 0.1) {
+      params.set('rotate', settings.autoRotateSpeed.toString());
+    }
+    if (selectedCommit) {
+      params.set('commit', selectedCommit.hash);
+    }
+    
+    const hash = params.toString();
+    const newHash = hash ? `#${hash}` : '';
+    
+    if (window.location.hash !== newHash) {
+      window.history.replaceState(null, '', newHash || window.location.pathname);
+    }
+  }, [settings, selectedCommit, repoData]);
 
   // Check authentication status on mount
   useEffect(() => {
@@ -116,6 +202,25 @@ const App: React.FC = () => {
               setTimelineCommitLimit(null);
               setView('detail');
               setIsLoading(false);
+              
+              // Fetch pull requests if authenticated
+              if (authState === 'authenticated') {
+                try {
+                  const urlParts = repoUrl.replace('https://github.com/', '').split('/');
+                  if (urlParts.length >= 2) {
+                    const [owner, repo] = urlParts;
+                    const prsResponse = await fetch(`/api/repo/prs?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`, {
+                      credentials: 'include'
+                    });
+                    if (prsResponse.ok) {
+                      const prs = await prsResponse.json();
+                      setPullRequests(prs);
+                    }
+                  }
+                } catch (err) {
+                  console.error('Failed to fetch PRs:', err);
+                }
+              }
             } else if (status.status === 'failed') {
               clearInterval(pollInterval);
               setIsLoading(false);
@@ -184,7 +289,7 @@ const App: React.FC = () => {
           {!repoData && !isLoading && (
             <RepoInputForm onAnalyze={handleAnalyzeRepo} error={error} />
           )}
-          {isLoading && <Loader />}
+      {isLoading && <Loader />}
           {repoData && view === 'detail' && (
             <>
               <GitGalaxyCanvas 
@@ -193,6 +298,8 @@ const App: React.FC = () => {
                 selectedCommit={selectedCommit}
                 filteredAuthor={filteredAuthor}
                 timelineCommitLimit={timelineCommitLimit}
+                settings={settings}
+                pullRequests={pullRequests}
               />
               <CommitInfoPanel 
                 commit={selectedCommit} 
@@ -209,6 +316,12 @@ const App: React.FC = () => {
                   onTimelineChange={setTimelineCommitLimit}
                 />
               )}
+              <CustomizationPanel
+                settings={settings}
+                onSettingsChange={setSettings}
+                isOpen={isPanelOpen}
+                onToggle={() => setIsPanelOpen(!isPanelOpen)}
+              />
               <button
                 onClick={() => {
                   setView('constellation');
@@ -248,6 +361,8 @@ const App: React.FC = () => {
                 selectedCommit={selectedCommit}
                 filteredAuthor={filteredAuthor}
                 timelineCommitLimit={timelineCommitLimit}
+                settings={settings}
+                pullRequests={pullRequests}
               />
               <CommitInfoPanel 
                 commit={selectedCommit} 
@@ -264,6 +379,12 @@ const App: React.FC = () => {
                   onTimelineChange={setTimelineCommitLimit}
                 />
               )}
+              <CustomizationPanel
+                settings={settings}
+                onSettingsChange={setSettings}
+                isOpen={isPanelOpen}
+                onToggle={() => setIsPanelOpen(!isPanelOpen)}
+              />
               <button
                 onClick={() => {
                   setView('constellation');
@@ -278,7 +399,7 @@ const App: React.FC = () => {
                 <p className="text-xs sm:text-sm font-mono text-white/40">Tap a node to inspect</p>
                 <p className="text-xs sm:text-sm font-mono text-white/40 hidden sm:block">Drag to rotate | Scroll to zoom</p>
                 <p className="text-xs sm:text-sm font-mono text-white/40 sm:hidden">Drag to rotate | Pinch to zoom</p>
-              </div>
+        </div>
             </>
           )}
           

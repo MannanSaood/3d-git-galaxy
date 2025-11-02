@@ -3,7 +3,8 @@ import * as THREE from 'three';
 import { initScene } from '../lib/three/sceneSetup';
 import { buildGraph } from '../lib/three/graphBuilder';
 import { addAtmosphericEffects, animateAtmosphericEffects } from '../lib/three/atmosphericEffects';
-import type { CommitNode, RepoData } from '../types';
+import { buildPullRequests } from '../lib/three/graphBuilder';
+import type { CommitNode, RepoData, Settings, PullRequest } from '../types';
 
 interface GitGalaxyCanvasProps {
   repoData: RepoData;
@@ -11,6 +12,8 @@ interface GitGalaxyCanvasProps {
   selectedCommit: { hash:string, node: CommitNode } | null;
   filteredAuthor: string | null;
   timelineCommitLimit: number | null;
+  settings?: Settings;
+  pullRequests?: PullRequest[];
 }
 
 const GitGalaxyCanvas: React.FC<GitGalaxyCanvasProps> = ({ 
@@ -18,7 +21,13 @@ const GitGalaxyCanvas: React.FC<GitGalaxyCanvasProps> = ({
   onCommitSelect, 
   selectedCommit,
   filteredAuthor,
-  timelineCommitLimit 
+  timelineCommitLimit,
+  settings = {
+    theme: 'cyberpunk',
+    bloomStrength: 1.7,
+    autoRotateSpeed: 0.1,
+  },
+  pullRequests = []
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stateRef = useRef({
@@ -28,11 +37,17 @@ const GitGalaxyCanvas: React.FC<GitGalaxyCanvasProps> = ({
     camera: null as THREE.PerspectiveCamera | null,
     controls: null as any,
     composer: null as any,
+    bloomPass: null as any,
+    prGroup: null as THREE.Group | null,
+    animatedPRMaterials: [] as THREE.MeshBasicMaterial[],
     isZooming: false,
     zoomTarget: null as THREE.Vector3 | null,
     zoomStartPos: null as THREE.Vector3 | null,
     zoomStartTarget: null as THREE.Vector3 | null,
     zoomStartTime: 0,
+    animationFrameId: null as number | null,
+    scene: null as THREE.Scene | null,
+    renderer: null as THREE.WebGLRenderer | null,
   });
 
   const updateCommitColors = useCallback(() => {
@@ -83,9 +98,58 @@ const GitGalaxyCanvas: React.FC<GitGalaxyCanvasProps> = ({
     }
   }, [selectedCommit, filteredAuthor, updateCommitColors]);
 
-
+  // Update settings dynamically when they change (without rebuilding scene)
   useEffect(() => {
-    if (!canvasRef.current || !repoData) return;
+    if (!settings || !stateRef.current.controls || !stateRef.current.bloomPass) return;
+    
+    stateRef.current.controls.autoRotateSpeed = settings.autoRotateSpeed;
+    stateRef.current.bloomPass.strength = settings.bloomStrength;
+  }, [settings?.autoRotateSpeed, settings?.bloomStrength]);
+
+  // Only rebuild scene when repoData, theme, or pullRequests change
+  useEffect(() => {
+    if (!canvasRef.current || !repoData || !settings) return;
+
+    // Clean up previous scene if it exists
+    if (stateRef.current.scene && stateRef.current.renderer) {
+      // Stop animation
+      if (stateRef.current.animationFrameId !== null) {
+        cancelAnimationFrame(stateRef.current.animationFrameId);
+      }
+      
+      // Dispose scene
+      stateRef.current.scene.traverse(object => {
+        if (object instanceof THREE.Mesh || object instanceof THREE.Points || object instanceof THREE.Group || object instanceof THREE.Sprite) {
+          if (object instanceof THREE.Group) {
+            object.children.forEach(child => {
+              if (child instanceof THREE.Mesh || child instanceof THREE.Sprite) {
+                if (child.geometry) child.geometry.dispose();
+                if (child.material) {
+                  const material = child.material as THREE.Material | THREE.Material[];
+                  if (Array.isArray(material)) {
+                    material.forEach(mat => mat.dispose());
+                  } else {
+                    material.dispose();
+                  }
+                }
+              }
+            });
+          } else {
+            if (object.geometry) object.geometry.dispose();
+            if (object.material) {
+              const material = object.material as THREE.Material | THREE.Material[];
+              if (Array.isArray(material)) {
+                material.forEach(mat => mat.dispose());
+              } else {
+                material.dispose();
+              }
+            }
+          }
+        }
+      });
+      
+      stateRef.current.renderer.dispose();
+    }
 
     // Apply timeline filter if set
     let filteredRepoData = repoData;
@@ -98,8 +162,20 @@ const GitGalaxyCanvas: React.FC<GitGalaxyCanvasProps> = ({
       });
     }
 
-    const { scene, camera, renderer, controls, composer, handleResize } = initScene(canvasRef.current);
-    const { stars } = buildGraph(scene, filteredRepoData);
+    const { scene, camera, renderer, controls, composer, handleResize, bloomPass } = initScene(canvasRef.current, settings);
+    const { stars } = buildGraph(scene, filteredRepoData, settings);
+    
+    // Build pull requests if available
+    let prGroup: THREE.Group | null = null;
+    let animatedPRMaterials: THREE.MeshBasicMaterial[] = [];
+    if (pullRequests.length > 0) {
+      const prResult = buildPullRequests(scene, pullRequests, filteredRepoData);
+      prGroup = prResult.prGroup;
+      animatedPRMaterials = prResult.animatedMaterials || [];
+    }
+    
+    // Store bloomPass and controls for dynamic updates
+    stateRef.current.bloomPass = bloomPass;
     const { particles } = addAtmosphericEffects(scene);
     
     const commitHashes = Object.keys(filteredRepoData);
@@ -109,6 +185,10 @@ const GitGalaxyCanvas: React.FC<GitGalaxyCanvasProps> = ({
     stateRef.current.camera = camera;
     stateRef.current.controls = controls;
     stateRef.current.composer = composer;
+    stateRef.current.prGroup = prGroup;
+    stateRef.current.animatedPRMaterials = animatedPRMaterials;
+    stateRef.current.scene = scene;
+    stateRef.current.renderer = renderer;
     
     // Initial color update
     updateCommitColors();
@@ -200,6 +280,14 @@ const GitGalaxyCanvas: React.FC<GitGalaxyCanvasProps> = ({
         }
       }
 
+      // Animate PR materials (pulsing for open PRs)
+      if (stateRef.current.animatedPRMaterials.length > 0) {
+        const time = Date.now() * 0.001;
+        stateRef.current.animatedPRMaterials.forEach(material => {
+          material.opacity = 0.5 + Math.sin(time * 2) * 0.3;
+        });
+      }
+
       if (stateRef.current.particles) {
         animateAtmosphericEffects(stateRef.current.particles, elapsedTime);
       }
@@ -212,28 +300,69 @@ const GitGalaxyCanvas: React.FC<GitGalaxyCanvasProps> = ({
         stateRef.current.composer.render();
       }
 
-      window.requestAnimationFrame(tick);
+      const frameId = window.requestAnimationFrame(tick);
+      stateRef.current.animationFrameId = frameId;
     };
 
     tick();
 
     return () => {
+      // Stop animation loop
+      if (stateRef.current.animationFrameId !== null) {
+        cancelAnimationFrame(stateRef.current.animationFrameId);
+        stateRef.current.animationFrameId = null;
+      }
+
       window.removeEventListener('resize', handleResize);
       canvasRef.current?.removeEventListener('click', onClick);
-      renderer.dispose();
-      scene.traverse(object => {
-        if (object instanceof THREE.Mesh || object instanceof THREE.Points) {
-          object.geometry.dispose();
-          const material = object.material as THREE.Material | THREE.Material[];
-          if (Array.isArray(material)) {
-            material.forEach(mat => mat.dispose());
-          } else {
-            material.dispose();
+      
+      // Dispose renderer
+      if (stateRef.current.renderer) {
+        stateRef.current.renderer.dispose();
+      }
+      
+      // Dispose all scene objects
+      if (stateRef.current.scene) {
+        stateRef.current.scene.traverse(object => {
+          if (object instanceof THREE.Mesh || object instanceof THREE.Points || object instanceof THREE.Group || object instanceof THREE.Sprite) {
+            if (object instanceof THREE.Group) {
+              object.children.forEach(child => {
+                if (child instanceof THREE.Mesh || child instanceof THREE.Sprite) {
+                  if (child.geometry) child.geometry.dispose();
+                  if (child.material) {
+                    const material = child.material as THREE.Material | THREE.Material[];
+                    if (Array.isArray(material)) {
+                      material.forEach(mat => mat.dispose());
+                    } else {
+                      material.dispose();
+                    }
+                  }
+                }
+              });
+            } else {
+              if (object.geometry) object.geometry.dispose();
+              if (object.material) {
+                const material = object.material as THREE.Material | THREE.Material[];
+                if (Array.isArray(material)) {
+                  material.forEach(mat => mat.dispose());
+                } else {
+                  material.dispose();
+                }
+              }
+            }
           }
-        }
-      });
+        });
+      }
+      
+      // Clear references
+      stateRef.current.stars = null;
+      stateRef.current.particles = null;
+      stateRef.current.prGroup = null;
+      stateRef.current.animatedPRMaterials = [];
+      stateRef.current.scene = null;
+      stateRef.current.renderer = null;
     };
-  }, [repoData, timelineCommitLimit, updateCommitColors, onCommitSelect]);
+  }, [repoData, timelineCommitLimit, settings.theme, pullRequests.length, onCommitSelect]);
 
   return <canvas ref={canvasRef} className="webgl fixed top-0 left-0 outline-none" />;
 };

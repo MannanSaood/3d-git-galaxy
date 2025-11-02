@@ -41,3 +41,11 @@ export interface PullRequest {
   headSha: string;
   baseSha: string;
 }
+
+export type Theme = 'cyberpunk' | 'forest' | 'solarized';
+
+export interface Settings {
+  theme: Theme;
+  bloomStrength: number;
+  autoRotateSpeed: number;
+}

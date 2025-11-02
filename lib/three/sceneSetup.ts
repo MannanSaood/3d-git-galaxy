@@ -4,8 +4,9 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import type { Settings } from '../../types';
 
-export const initScene = (canvas: HTMLCanvasElement) => {
+export const initScene = (canvas: HTMLCanvasElement, settings: Settings) => {
   // Scene
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x000000);
@@ -32,7 +33,7 @@ export const initScene = (canvas: HTMLCanvasElement) => {
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   controls.autoRotate = true;
-  controls.autoRotateSpeed = 0.1; // Very subtle rotation (was 0.5)
+  controls.autoRotateSpeed = settings.autoRotateSpeed;
 
   // Enhanced touch controls for mobile devices
   controls.enablePan = true;
@@ -62,7 +63,7 @@ export const initScene = (canvas: HTMLCanvasElement) => {
   // Post-processing
   const renderScene = new RenderPass(scene, camera);
   const bloomPass = new UnrealBloomPass(new THREE.Vector2(sizes.width, sizes.height), 1.5, 0.4, 0.05);
-  bloomPass.strength = 1.7;
+  bloomPass.strength = settings.bloomStrength;
   bloomPass.radius = 0.5;
   bloomPass.threshold = 0.03;
 
@@ -85,5 +86,5 @@ export const initScene = (canvas: HTMLCanvasElement) => {
     bloomPass.setSize(sizes.width, sizes.height);
   };
 
-  return { scene, camera, renderer, controls, composer, handleResize };
+  return { scene, camera, renderer, controls, composer, handleResize, bloomPass };
 };

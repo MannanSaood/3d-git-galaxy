@@ -24,7 +24,7 @@ const Header: React.FC<HeaderProps> = ({ authState, user, onLogout, onSearchRepo
         onLogout();
       }
     } catch (error) {
-      console.error('Logout error:', error);
+      // Silent error handling
     }
   };
 
@@ -36,7 +36,7 @@ const Header: React.FC<HeaderProps> = ({ authState, user, onLogout, onSearchRepo
     try {
       await onSearchRepo(searchUrl.trim());
     } catch (error) {
-      console.error('Search error:', error);
+      // Error handled by parent component
     } finally {
       setIsSearching(false);
       setSearchUrl('');

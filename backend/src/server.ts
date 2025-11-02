@@ -40,9 +40,30 @@ try {
 }
 
 // Configure CORS to allow credentials and Vercel frontend
-const FRONTEND_URL_FOR_CORS = process.env.FRONTEND_URL || 'http://localhost:5173';
+// Normalize FRONTEND_URL by removing trailing slash (browsers send origin without trailing slash)
+const FRONTEND_URL_FOR_CORS = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
 app.use(cors({
-    origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+    origin: function (origin, callback) {
+        // Allow requests with no origin (like mobile apps or curl requests)
+        if (!origin) return callback(null, true);
+        
+        // Normalize origin by removing trailing slash
+        const normalizedOrigin = origin.replace(/\/$/, '');
+        
+        // Check if origin matches allowed frontend URL
+        if (normalizedOrigin === FRONTEND_URL_FOR_CORS) {
+            callback(null, true);
+        } else if (process.env.NODE_ENV === 'development') {
+            // In development, allow localhost with any port
+            if (normalizedOrigin.startsWith('http://localhost:') || normalizedOrigin.startsWith('http://127.0.0.1:')) {
+                callback(null, true);
+            } else {
+                callback(new Error(`CORS: Origin ${normalizedOrigin} not allowed. Expected ${FRONTEND_URL_FOR_CORS}`));
+            }
+        } else {
+            callback(new Error(`CORS: Origin ${normalizedOrigin} not allowed. Expected ${FRONTEND_URL_FOR_CORS}`));
+        }
+    },
     credentials: true
 }));
 app.use(express.json());

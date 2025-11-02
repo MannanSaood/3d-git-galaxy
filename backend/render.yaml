@@ -2,7 +2,7 @@ services:
   - type: web
     name: 3d-git-galaxy-backend
     env: node
-    buildCommand: npm install --production=false && npm run build
+    buildCommand: npm ci && npm run build
     startCommand: npm start
     envVars:
       - key: NODE_ENV

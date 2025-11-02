@@ -82,8 +82,12 @@ app.use(session({
     }
 }));
 
-// Initialize Database
-initDb();
+// Initialize Database (async)
+initDb().catch((err) => {
+    if (process.env.NODE_ENV === 'development') {
+        console.error('Database initialization error:', err);
+    }
+});
 
 // Initialize Gemini AI client
 let genAI: GoogleGenerativeAI | null = null;
@@ -490,7 +494,7 @@ async function processRepoAnalysis(repoUrl: string, jobId: string, accessToken?:
         const authors = Array.from(authorMap.entries()).map(([name, count]) => ({ name, commitCount: count }));
 
         const result = { repoData, authors };
-        storeRepo(repoUrl, result);
+        await storeRepo(repoUrl, result);
         updateJobStatus(jobId, 'complete', result);
 
     } catch (error: any) {
@@ -514,7 +518,7 @@ app.post('/api/analyze', async (req: express.Request, res: express.Response) => 
     }
 
     // Check database cache first
-    const cached = getRepo(repoUrl);
+    const cached = await getRepo(repoUrl);
     if (cached) {
         return res.json(cached);
     }

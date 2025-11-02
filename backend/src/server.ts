@@ -259,24 +259,45 @@ app.get('/api/auth/github/callback', async (req: express.Request, res: express.R
     // Validate state
     if (!state) {
         // Redirect to frontend with error if accessed directly
-        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+        const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
         return res.redirect(`${frontendUrl}?error=missing_state`);
     }
     
-    if (!req.session.state) {
+    if (!req.session || !req.session.state) {
         // Session expired or not found - likely accessed directly or session lost
-        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+        // This can happen if:
+        // 1. User visited callback URL directly without going through OAuth
+        // 2. Session cookie wasn't set/sent properly (CORS/cookie issues)
+        // 3. Session store cleared the session
+        
+        // Don't show error if there's no state in query either (direct visit)
+        if (!state) {
+            const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+            return res.redirect(`${frontendUrl}?error=missing_state`);
+        }
+        
+        // If we have a state but no session, it's likely a session persistence issue
+        const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+        if (process.env.NODE_ENV === 'development') {
+            console.error('Session state missing:', {
+                hasSession: !!req.session,
+                hasState: !!(req.session && req.session.state),
+                receivedState: state,
+                sessionId: req.sessionID
+            });
+        }
         return res.redirect(`${frontendUrl}?error=session_expired`);
     }
     
     if (state !== req.session.state) {
         // State mismatch - potential CSRF attack or session issue
-        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+        const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
         if (process.env.NODE_ENV === 'development') {
             console.error('State mismatch:', {
                 received: state,
                 expected: req.session.state,
-                hasSession: !!req.session
+                hasSession: !!req.session,
+                sessionId: req.sessionID
             });
         }
         return res.redirect(`${frontendUrl}?error=invalid_state`);
@@ -329,8 +350,20 @@ app.get('/api/auth/github/callback', async (req: express.Request, res: express.R
         req.session.user = userData;
         req.session.state = undefined; // Clear state
         
-        // Redirect to frontend with success
-        res.redirect(`${FRONTEND_URL}?authenticated=true`);
+        // Save session before redirecting (critical for cross-origin)
+        req.session.save((err) => {
+            if (err) {
+                if (process.env.NODE_ENV === 'development') {
+                    console.error('Session save error after auth:', err);
+                }
+                const frontendUrl = (FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+                return res.redirect(`${frontendUrl}?error=auth_failed`);
+            }
+            
+            // Redirect to frontend with success
+            const frontendUrl = (FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+            res.redirect(`${frontendUrl}?authenticated=true`);
+        });
     } catch (error) {
         if (process.env.NODE_ENV === 'development') {
             console.error('OAuth callback error:', error);

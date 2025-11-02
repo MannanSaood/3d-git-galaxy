@@ -1,0 +1,17 @@
+name: 3d-git-galaxy
+
+services:
+  - name: backend
+    type: web
+    build:
+      type: dockerfile
+      dockerfile_path: backend/Dockerfile
+    ports:
+      - port: 3001
+        protocol: http
+    env:
+      - name: NODE_ENV
+        value: production
+      - name: PORT
+        value: "3001"
+

@@ -34,7 +34,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install only production dependencies
-RUN npm ci --omit=dev
+RUN npm install --omit=dev
 
 # Remove build tools to reduce image size (optional, but better-sqlite3 needs runtime libs)
 # RUN apk del python3 make g++

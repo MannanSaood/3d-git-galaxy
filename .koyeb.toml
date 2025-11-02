@@ -1,4 +1,7 @@
 [build]
   type = "dockerfile"
   dockerfile = "backend/Dockerfile"
+  
+[deploy]
+  restart_policy = "always"
 

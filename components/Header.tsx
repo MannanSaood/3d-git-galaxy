@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import type { User } from '../types';
+import { API_BASE_URL } from '../config';
 
 interface HeaderProps {
   authState: 'loading' | 'authenticated' | 'unauthenticated';
@@ -15,7 +16,7 @@ const Header: React.FC<HeaderProps> = ({ authState, user, onLogout, onSearchRepo
 
   const handleLogout = async () => {
     try {
-      const response = await fetch('/api/auth/logout', {
+      const response = await fetch(`${API_BASE_URL}/api/auth/logout`, {
         method: 'POST',
         credentials: 'include'
       });
@@ -91,7 +92,7 @@ const Header: React.FC<HeaderProps> = ({ authState, user, onLogout, onSearchRepo
         <div className="flex-shrink-0 pointer-events-auto">
           {authState === 'unauthenticated' && (
             <a
-              href="/api/auth/github"
+              href={`${API_BASE_URL}/api/auth/github`}
               className="px-3 sm:px-4 py-1.5 sm:py-2 bg-cyan-500/80 hover:bg-cyan-500 text-black font-mono font-bold rounded transition-colors text-xs sm:text-sm text-center whitespace-nowrap"
             >
               Login with GitHub

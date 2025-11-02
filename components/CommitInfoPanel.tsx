@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import type { CommitNode, DiffStat } from '../types';
+import { API_BASE_URL } from '../config';
 
 interface CommitInfoPanelProps {
   commit: { hash: string, node: CommitNode } | null;
@@ -17,7 +18,7 @@ const CommitInfoPanel: React.FC<CommitInfoPanelProps> = ({ commit, onClose, repo
   useEffect(() => {
     if (commit && repoUrl) {
       setLoadingDiff(true);
-      fetch(`/api/repo/commit/${commit.hash}/diff?repoUrl=${encodeURIComponent(repoUrl)}`)
+      fetch(`${API_BASE_URL}/api/repo/commit/${commit.hash}/diff?repoUrl=${encodeURIComponent(repoUrl)}`)
         .then(res => res.json())
         .then(data => {
           setDiffStat(data);
@@ -39,7 +40,7 @@ const CommitInfoPanel: React.FC<CommitInfoPanelProps> = ({ commit, onClose, repo
     setSummary(null);
     
     try {
-      const response = await fetch('/api/ai/summarize-commit', {
+      const response = await fetch(`${API_BASE_URL}/api/ai/summarize-commit`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

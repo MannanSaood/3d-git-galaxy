@@ -39,7 +39,8 @@ try {
     // .env doesn't exist, that's okay
 }
 
-// Configure CORS to allow credentials
+// Configure CORS to allow credentials and Vercel frontend
+const FRONTEND_URL_FOR_CORS = process.env.FRONTEND_URL || 'http://localhost:5173';
 app.use(cors({
     origin: process.env.FRONTEND_URL || 'http://localhost:5173',
     credentials: true

@@ -8,6 +8,7 @@ import ConstellationCanvas from './components/ConstellationCanvas';
 import AnalyticsPanel from './components/AnalyticsPanel';
 import type { CommitNode, RepoData, User, ConstellationRepo, Author, Settings, PullRequest } from './types';
 import CustomizationPanel from './components/CustomizationPanel';
+import { API_BASE_URL } from './config';
 
 const App: React.FC = () => {
   const [selectedCommit, setSelectedCommit] = useState<{ hash: string, node: CommitNode } | null>(null);
@@ -116,7 +117,7 @@ const App: React.FC = () => {
   useEffect(() => {
     const checkAuthStatus = async () => {
       try {
-        const response = await fetch('/api/auth/status', {
+        const response = await fetch(`${API_BASE_URL}/api/auth/status`, {
           credentials: 'include'
         });
         
@@ -128,7 +129,7 @@ const App: React.FC = () => {
           
           // Fetch user's repositories
           try {
-            const reposResponse = await fetch('/api/user/repos', {
+            const reposResponse = await fetch(`${API_BASE_URL}/api/user/repos`, {
               credentials: 'include'
             });
             
@@ -158,7 +159,7 @@ const App: React.FC = () => {
     setSelectedCommit(null);
 
     try {
-      const response = await fetch('/api/analyze', {
+      const response = await fetch(`${API_BASE_URL}/api/analyze`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -179,7 +180,7 @@ const App: React.FC = () => {
         // Poll for job status
         const pollInterval = setInterval(async () => {
           try {
-            const statusResponse = await fetch(`/api/job/${responseData.jobId}/status`, {
+            const statusResponse = await fetch(`${API_BASE_URL}/api/job/${responseData.jobId}/status`, {
               credentials: 'include'
             });
             
@@ -209,7 +210,7 @@ const App: React.FC = () => {
                   const urlParts = repoUrl.replace('https://github.com/', '').split('/');
                   if (urlParts.length >= 2) {
                     const [owner, repo] = urlParts;
-                    const prsResponse = await fetch(`/api/repo/prs?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`, {
+                    const prsResponse = await fetch(`${API_BASE_URL}/api/repo/prs?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`, {
                       credentials: 'include'
                     });
                     if (prsResponse.ok) {

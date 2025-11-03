@@ -53,19 +53,44 @@ app.use(cors({
         // Normalize origin by removing trailing slash
         const normalizedOrigin = origin.replace(/\/$/, '');
         
-        // Check if origin matches allowed frontend URL
+        // Check if origin matches allowed frontend URL exactly
         if (normalizedOrigin === FRONTEND_URL_FOR_CORS) {
             callback(null, true);
-        } else if (process.env.NODE_ENV === 'development') {
-            // In development, allow localhost with any port
+            return;
+        }
+        
+        // In production, allow Vercel preview deployments
+        // Vercel preview URLs: https://3d-git-galaxy-*-*-*.vercel.app (can have multiple segments)
+        // Vercel production URL: https://3d-git-galaxy.vercel.app
+        if (process.env.NODE_ENV === 'production' && FRONTEND_URL_FOR_CORS.includes('vercel.app')) {
+            // Extract base domain from FRONTEND_URL (e.g., "3d-git-galaxy" from "https://3d-git-galaxy.vercel.app")
+            const frontendUrlMatch = FRONTEND_URL_FOR_CORS.match(/https?:\/\/([^.]+)\.vercel\.app/);
+            if (frontendUrlMatch) {
+                const baseDomain = frontendUrlMatch[1];
+                // Check if origin is a Vercel deployment (production or preview)
+                // Preview URLs can have multiple segments: baseDomain-segment1-segment2-...
+                // Escape the baseDomain for regex (it might contain special chars)
+                const escapedBaseDomain = baseDomain.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                // Match: baseDomain or baseDomain-segments (where segments are alphanumeric/hyphens)
+                // Example: 3d-git-galaxy or 3d-git-galaxy-4tcldct5v-mannansaoods-projects
+                const vercelPattern = new RegExp(`^https://${escapedBaseDomain}(-[a-zA-Z0-9-]+)*\\.vercel\\.app$`);
+                if (vercelPattern.test(normalizedOrigin)) {
+                    callback(null, true);
+                    return;
+                }
+            }
+        }
+        
+        // In development, allow localhost with any port
+        if (process.env.NODE_ENV === 'development') {
             if (normalizedOrigin.startsWith('http://localhost:') || normalizedOrigin.startsWith('http://127.0.0.1:')) {
                 callback(null, true);
-            } else {
-                callback(new Error(`CORS: Origin ${normalizedOrigin} not allowed. Expected ${FRONTEND_URL_FOR_CORS}`));
+                return;
             }
-        } else {
-            callback(new Error(`CORS: Origin ${normalizedOrigin} not allowed. Expected ${FRONTEND_URL_FOR_CORS}`));
         }
+        
+        // Reject all other origins
+        callback(new Error(`CORS: Origin ${normalizedOrigin} not allowed. Expected ${FRONTEND_URL_FOR_CORS} or Vercel preview deployment`));
     },
     credentials: true
 }));

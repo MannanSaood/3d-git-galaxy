@@ -8,7 +8,6 @@ import os from 'os';
 import type { RepoData, CommitNode } from './types';
 import { fileURLToPath } from 'url';
 import session from 'express-session';
-import connectPgSimple from 'connect-pg-simple';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
 import { GoogleGenerativeAI } from '@google/generative-ai';
@@ -90,14 +89,30 @@ console.log('[SESSION CONFIG]', {
 });
 
 // Configure session store - use PostgreSQL if available, otherwise MemoryStore (dev only)
-let sessionStore: any;
-if (DATABASE_URL) {
+// Initialize synchronously first, then upgrade to PostgreSQL if needed
+let sessionStore: any = new session.MemoryStore();
+
+// Async function to initialize PostgreSQL session store if DATABASE_URL is available
+async function initializeSessionStore() {
+    if (!DATABASE_URL) {
+        // Use MemoryStore only for development (with warning)
+        console.log('[SESSION STORE] Using MemoryStore (no DATABASE_URL found)');
+        if (isProduction) {
+            console.error('[SESSION STORE] WARNING: Using MemoryStore in production! This will cause session issues!');
+            console.error('[SESSION STORE] Please set DATABASE_URL environment variable!');
+        }
+        return;
+    }
+
     // Use PostgreSQL session store if DATABASE_URL is available
     console.log('[SESSION STORE] Attempting to use PostgreSQL session store');
     console.log('[SESSION STORE] DATABASE_URL present:', DATABASE_URL.substring(0, 20) + '...');
     try {
+        // Dynamic import to avoid TypeScript module resolution issues in Docker build
+        // TypeScript may not resolve this at compile time, but it will work at runtime
+        const connectPgSimple = (await import('connect-pg-simple') as any).default;
         const PgSessionStore = connectPgSimple(session);
-        sessionStore = new PgSessionStore({
+        const pgStore = new PgSessionStore({
             conString: DATABASE_URL,
             tableName: 'user_sessions', // Table name for sessions
             createTableIfMissing: true,
@@ -109,8 +124,8 @@ if (DATABASE_URL) {
         });
         
         // Add error event handlers to session store
-        if (sessionStore && typeof (sessionStore as any).client === 'object') {
-            const client = (sessionStore as any).client;
+        if (pgStore && typeof (pgStore as any).client === 'object') {
+            const client = (pgStore as any).client;
             if (client && typeof client.on === 'function') {
                 client.on('error', (err: Error) => {
                     console.error('[SESSION STORE] PostgreSQL client error:', err.message);
@@ -119,6 +134,7 @@ if (DATABASE_URL) {
             }
         }
         
+        sessionStore = pgStore;
         console.log('[SESSION STORE] PostgreSQL session store initialized successfully');
     } catch (error: any) {
         console.error('[SESSION STORE] Failed to initialize PostgreSQL store:', error.message || error);
@@ -126,17 +142,15 @@ if (DATABASE_URL) {
         if (isProduction) {
             console.error('[SESSION STORE] WARNING: Using MemoryStore in production! Sessions will not persist!');
         }
-        sessionStore = new session.MemoryStore();
+        // Keep MemoryStore as fallback
     }
-} else {
-    // Use MemoryStore only for development (with warning)
-    console.log('[SESSION STORE] Using MemoryStore (no DATABASE_URL found)');
-    if (isProduction) {
-        console.error('[SESSION STORE] WARNING: Using MemoryStore in production! This will cause session issues!');
-        console.error('[SESSION STORE] Please set DATABASE_URL environment variable!');
-    }
-    sessionStore = new session.MemoryStore();
 }
+
+// Initialize session store asynchronously (non-blocking)
+initializeSessionStore().catch((error) => {
+    console.error('[SESSION STORE] Initialization error:', error.message || error);
+    // Continue with MemoryStore
+});
 
 const sessionConfig: session.SessionOptions = {
     store: sessionStore,

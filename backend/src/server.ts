@@ -155,7 +155,7 @@ initializeSessionStore().catch((error) => {
 const sessionConfig: session.SessionOptions = {
     store: sessionStore,
     secret: SESSION_SECRET,
-    resave: false, // PostgreSQL handles this
+    resave: true, // Force save on every request for cross-origin reliability
     saveUninitialized: false,
     rolling: true, // Reset expiration on every request
     name: 'gitgalaxy.sid', // Use a custom name instead of default 'connect.sid'
@@ -164,7 +164,8 @@ const sessionConfig: session.SessionOptions = {
         httpOnly: true,
         maxAge: 24 * 60 * 60 * 1000, // 24 hours
         sameSite: isProduction ? 'none' : 'lax', // 'none' for cross-origin in production, 'lax' for development
-        // Don't set domain/path - let browser handle it for cross-origin
+        path: '/', // Explicit path
+        // Don't set domain - let browser handle it for cross-origin
     }
 };
 
@@ -406,16 +407,8 @@ app.get('/api/auth/github', (req: express.Request, res: express.Response) => {
         console.log('[OAUTH START] Session saved successfully', {
             sessionId: req.sessionID,
             stateSet: !!req.session.state,
-            stateLength: req.session.state?.length || 0
-        });
-        
-        // Explicitly set cookie header as backup
-        res.cookie('gitgalaxy.sid', req.sessionID, {
-            secure: isProduction,
-            httpOnly: true,
-            maxAge: 24 * 60 * 60 * 1000,
-            sameSite: isProduction ? 'none' : 'lax',
-            path: '/' // Explicit path
+            stateLength: req.session.state?.length || 0,
+            cookieHeader: res.getHeader('Set-Cookie') ? 'set' : 'not set'
         });
         
         // GitHub authorization URL
@@ -557,26 +550,35 @@ app.get('/api/auth/github/callback', async (req: express.Request, res: express.R
             
             console.log('[OAUTH CALLBACK] Session saved successfully', {
                 sessionId: req.sessionID,
-                willSetCookie: true
+                cookieHeader: res.getHeader('Set-Cookie') ? 'set' : 'not set',
+                cookieValue: res.getHeader('Set-Cookie') ? String(res.getHeader('Set-Cookie')).substring(0, 100) : 'none'
             });
             
-            // Explicitly set cookie header as backup (should already be set by session middleware)
-            res.cookie('gitgalaxy.sid', req.sessionID, {
-                secure: isProduction,
-                httpOnly: true,
-                maxAge: 24 * 60 * 60 * 1000,
-                sameSite: isProduction ? 'none' : 'lax',
-                path: '/' // Explicit path
-            });
-            
-            // Redirect to frontend with success
+            // For cross-origin cookies, use an HTML redirect page instead of res.redirect()
+            // This ensures the cookie is set before navigation
             const frontendUrl = (FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
             console.log('[OAUTH CALLBACK] Redirecting to frontend', {
                 frontendUrl,
                 sessionId: req.sessionID
             });
             
-            res.redirect(`${frontendUrl}?authenticated=true`);
+            // Send HTML page with immediate redirect to ensure cookie is set
+            res.send(`
+<!DOCTYPE html>
+<html>
+<head>
+    <meta http-equiv="refresh" content="0;url=${frontendUrl}?authenticated=true">
+    <script>
+        // Fallback redirect in case meta refresh doesn't work
+        window.location.href = "${frontendUrl}?authenticated=true";
+    </script>
+</head>
+<body>
+    <p>Redirecting...</p>
+    <a href="${frontendUrl}?authenticated=true">Click here if you are not redirected</a>
+</body>
+</html>
+            `);
         });
     } catch (error) {
         if (process.env.NODE_ENV === 'development') {

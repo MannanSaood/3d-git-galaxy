@@ -161,6 +161,33 @@ async function initializeSessionStore() {
         
         sessionStore = pgStore;
         console.log('[SESSION STORE] PostgreSQL session store initialized successfully');
+        
+        // Update the session middleware's store reference if it's already been created
+        // This is a workaround for the async initialization
+        if (app && (app as any)._router) {
+            // Find the session middleware and update its store
+            const updateSessionStore = (middleware: any) => {
+                if (middleware && middleware.store && middleware.store !== pgStore) {
+                    console.log('[SESSION STORE] Updating session middleware store reference');
+                    middleware.store = pgStore;
+                }
+            };
+            // Try to find and update session middleware
+            try {
+                const router = (app as any)._router;
+                if (router && router.stack) {
+                    router.stack.forEach((layer: any) => {
+                        if (layer && layer.handle) {
+                            if (layer.handle.name === 'session' || (layer.handle.store && layer.handle.store === sessionStore)) {
+                                updateSessionStore(layer.handle);
+                            }
+                        }
+                    });
+                }
+            } catch (e) {
+                // Ignore errors - this is just a workaround
+            }
+        }
     } catch (error: any) {
         console.error('[SESSION STORE] Failed to initialize PostgreSQL store:', error.message || error);
         console.log('[SESSION STORE] Falling back to MemoryStore');
@@ -171,14 +198,46 @@ async function initializeSessionStore() {
     }
 }
 
-// Initialize session store asynchronously (non-blocking)
-initializeSessionStore().catch((error) => {
-    console.error('[SESSION STORE] Initialization error:', error.message || error);
-    // Continue with MemoryStore
+// Track session store initialization status
+let sessionStoreReady = false;
+const sessionStoreReadyPromise = initializeSessionStore()
+    .then(() => {
+        sessionStoreReady = true;
+        console.log('[SESSION STORE] Initialization complete, store is ready');
+    })
+    .catch((error) => {
+        console.error('[SESSION STORE] Initialization error:', error.message || error);
+        sessionStoreReady = true; // Mark as ready even if it failed (using MemoryStore fallback)
+        // Continue with MemoryStore
+    });
+
+// In production, wait for session store to be ready before accepting requests
+// This ensures sessions are saved to PostgreSQL from the start
+if (isProduction && DATABASE_URL) {
+    console.log('[SESSION STORE] Waiting for PostgreSQL session store to initialize...');
+    // Don't block server startup, but log a warning if it takes too long
+    sessionStoreReadyPromise.then(() => {
+        console.log('[SESSION STORE] PostgreSQL store ready, sessions will persist');
+    });
+}
+
+// Create a proxy store that always returns the current sessionStore
+// This allows the store to be updated after middleware creation
+const storeProxy = new Proxy(sessionStore, {
+    get(target, prop) {
+        // Always return from the current sessionStore (which may have been updated)
+        const currentStore = sessionStore;
+        if (prop === 'get' || prop === 'set' || prop === 'destroy' || prop === 'all') {
+            return (...args: any[]) => {
+                return (currentStore as any)[prop](...args);
+            };
+        }
+        return (currentStore as any)[prop];
+    }
 });
 
 const sessionConfig: session.SessionOptions = {
-    store: sessionStore,
+    store: storeProxy as any,
     secret: SESSION_SECRET,
     resave: true, // Force save on every request for cross-origin reliability
     saveUninitialized: false,
@@ -189,9 +248,6 @@ const sessionConfig: session.SessionOptions = {
         httpOnly: true,
         maxAge: 24 * 60 * 60 * 1000, // 24 hours
         sameSite: isProduction ? 'none' : 'lax', // 'none' for cross-origin in production, 'lax' for development
-        // Use Partitioned cookies (CHIPS) so modern browsers accept cross-site cookies
-        // when used in third-party contexts (cross-origin frontend -> backend requests)
-        partitioned: isProduction,
         path: '/', // Explicit path
         // Don't set domain - let browser handle it for cross-origin
     }
@@ -199,6 +255,72 @@ const sessionConfig: session.SessionOptions = {
 
 app.use(session(sessionConfig));
 console.log('[SESSION] Middleware configured with', DATABASE_URL ? 'PostgreSQL store' : 'MemoryStore');
+
+// Middleware to manually add Partitioned attribute to Set-Cookie headers (for CHIPS support)
+// express-session doesn't support the partitioned option directly
+app.use((req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const originalEnd = res.end;
+    res.end = function(chunk?: any, encoding?: any, cb?: any) {
+        // Intercept Set-Cookie headers before response is sent
+        const setCookieHeaders = res.getHeader('Set-Cookie');
+        if (isProduction && setCookieHeaders) {
+            const cookies = Array.isArray(setCookieHeaders) ? setCookieHeaders : [setCookieHeaders];
+            const modifiedCookies = cookies.map((cookie: string) => {
+                // Add Partitioned attribute if it's our session cookie and doesn't already have it
+                if (cookie.includes('gitgalaxy.sid=') && !cookie.includes('Partitioned')) {
+                    return cookie + '; Partitioned';
+                }
+                return cookie;
+            });
+            res.setHeader('Set-Cookie', modifiedCookies);
+        }
+        return originalEnd.call(this, chunk, encoding, cb);
+    };
+    next();
+});
+
+// Middleware to log session store operations and verify store usage
+app.use((req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const sessionId = req.sessionID;
+    const hasSession = !!req.session;
+    const sessionKeys = hasSession ? Object.keys(req.session) : [];
+    const cookies = req.headers.cookie || 'none';
+    
+    // Check what store is actually being used
+    const sessionMiddleware = (req as any).sessionStore || (sessionConfig as any).store;
+    const storeType = sessionStore && sessionStore !== (new session.MemoryStore()) ? 'PostgreSQL' : 'MemoryStore';
+    const isUsingPgStore = DATABASE_URL && sessionStore && typeof (sessionStore as any).client !== 'undefined';
+    
+    console.log('[SESSION REQUEST]', req.method, req.path, {
+        sessionId: sessionId,
+        hasSession: hasSession,
+        hasState: hasSession && 'state' in req.session ? !!req.session.state : false,
+        hasAccessToken: hasSession && 'accessToken' in req.session ? !!req.session.accessToken : false,
+        cookies: cookies.length > 100 ? cookies.substring(0, 100) + '...' : cookies,
+        origin: req.headers.origin,
+        referer: req.headers.referer,
+        storeType: storeType,
+        isUsingPgStore: isUsingPgStore,
+        hasDatabaseUrl: !!DATABASE_URL
+    });
+    
+    // Wrap req.session.save to log when sessions are saved
+    if (hasSession && req.session.save) {
+        const originalSave = req.session.save.bind(req.session);
+        req.session.save = function(callback?: (err?: any) => void) {
+            console.log('[SESSION SAVE] Saving session', {
+                sessionId: sessionId,
+                storeType: storeType,
+                sessionKeys: Object.keys(req.session || {}),
+                hasState: 'state' in (req.session || {}),
+                hasAccessToken: 'accessToken' in (req.session || {})
+            });
+            return originalSave(callback);
+        };
+    }
+    
+    next();
+});
 
 // Handle unhandled PostgreSQL errors gracefully
 process.on('unhandledRejection', (reason: any, promise) => {

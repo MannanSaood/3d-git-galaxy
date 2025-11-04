@@ -797,33 +797,27 @@ app.get('/api/auth/github/callback', async (req: express.Request, res: express.R
                 return res.redirect(`${frontendUrl}?error=auth_failed`);
             }
             
+            // Log cookie headers before redirect
+            const setCookieHeaders = res.getHeader('Set-Cookie');
+            const frontendUrl = (FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+            
             console.log('[OAUTH CALLBACK] Session saved successfully', {
                 sessionId: req.sessionID,
-                cookieHeader: res.getHeader('Set-Cookie') ? 'set' : 'not set',
-                cookieValue: res.getHeader('Set-Cookie') ? String(res.getHeader('Set-Cookie')).substring(0, 100) : 'none'
+                cookieHeader: setCookieHeaders ? 'set' : 'not set',
+                cookieValue: setCookieHeaders ? (Array.isArray(setCookieHeaders) ? setCookieHeaders[0]?.toString().substring(0, 100) : setCookieHeaders.toString().substring(0, 100)) : 'none',
+                hasSetCookie: !!setCookieHeaders,
+                setCookieCount: Array.isArray(setCookieHeaders) ? setCookieHeaders.length : (setCookieHeaders ? 1 : 0)
+            });
+            
+            console.log('[OAUTH CALLBACK] Redirecting to frontend', {
+                frontendUrl,
+                sessionId: req.sessionID,
+                setCookiePreview: setCookieHeaders ? (Array.isArray(setCookieHeaders) ? setCookieHeaders[0]?.toString().substring(0, 150) : setCookieHeaders.toString().substring(0, 150)) : 'none'
             });
             
             // For cross-origin cookies, use an HTML redirect page instead of res.redirect()
             // This ensures the cookie is set before navigation
-            const frontendUrl = (FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
-            // Force save session one more time and wait for it before redirecting
-            req.session.save((saveErr) => {
-                if (saveErr) {
-                    console.error('[OAUTH CALLBACK] Final session save error:', saveErr);
-                }
-                
-                // Log cookie headers before redirect
-                const setCookieHeaders = res.getHeader('Set-Cookie');
-                console.log('[OAUTH CALLBACK] Redirecting to frontend', {
-                    frontendUrl,
-                    sessionId: req.sessionID,
-                    hasSetCookie: !!setCookieHeaders,
-                    setCookieCount: Array.isArray(setCookieHeaders) ? setCookieHeaders.length : (setCookieHeaders ? 1 : 0),
-                    setCookiePreview: setCookieHeaders ? (Array.isArray(setCookieHeaders) ? setCookieHeaders[0]?.toString().substring(0, 150) : setCookieHeaders.toString().substring(0, 150)) : 'none'
-                });
-                
-                // Send HTML page with immediate redirect to ensure cookie is set
-                res.send(`
+            res.send(`
 <!DOCTYPE html>
 <html>
 <head>

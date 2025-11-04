@@ -117,6 +117,58 @@ console.log('[SESSION CONFIG]', {
 // Initialize synchronously first, then upgrade to PostgreSQL if needed
 let sessionStore: any = new session.MemoryStore();
 
+// Wrapper store that delegates to the current sessionStore
+// This allows the store to be updated after middleware creation
+class DelegatingStore {
+    private currentStore: any;
+    
+    constructor(initialStore: any) {
+        this.currentStore = initialStore;
+    }
+    
+    setStore(store: any) {
+        this.currentStore = store;
+    }
+    
+    get(sid: string, callback: (err: any, session?: any) => void) {
+        return this.currentStore.get(sid, callback);
+    }
+    
+    set(sid: string, session: any, callback?: (err?: any) => void) {
+        return this.currentStore.set(sid, session, callback);
+    }
+    
+    destroy(sid: string, callback?: (err?: any) => void) {
+        return this.currentStore.destroy(sid, callback);
+    }
+    
+    all(callback: (err: any, sessions?: any) => void) {
+        return this.currentStore.all(callback);
+    }
+    
+    length(callback: (err: any, length?: number) => void) {
+        return this.currentStore.length(callback);
+    }
+    
+    clear(callback?: (err?: any) => void) {
+        return this.currentStore.clear(callback);
+    }
+    
+    touch(sid: string, session: any, callback?: (err?: any) => void) {
+        return this.currentStore.touch(sid, session, callback);
+    }
+    
+    generate(req: any) {
+        if (this.currentStore.generate) {
+            return this.currentStore.generate(req);
+        }
+        // Fallback: generate session ID using crypto (same as express-session default)
+        return crypto.randomBytes(24).toString('base64url');
+    }
+}
+
+const delegatingStore = new DelegatingStore(sessionStore);
+
 // Async function to initialize PostgreSQL session store if DATABASE_URL is available
 async function initializeSessionStore() {
     if (!DATABASE_URL) {
@@ -137,8 +189,16 @@ async function initializeSessionStore() {
         // TypeScript may not resolve this at compile time, but it will work at runtime
         const connectPgSimple = (await import('connect-pg-simple') as any).default;
         const PgSessionStore = connectPgSimple(session);
+        // Add SSL mode to connection string if not already present
+        let connectionString = DATABASE_URL;
+        if (connectionString && !connectionString.includes('sslmode=')) {
+            const separator = connectionString.includes('?') ? '&' : '?';
+            connectionString = `${connectionString}${separator}sslmode=require`;
+            console.log('[SESSION STORE] Added sslmode=require to connection string');
+        }
+        
         const pgStore = new PgSessionStore({
-            conString: DATABASE_URL,
+            conString: connectionString,
             tableName: 'user_sessions', // Table name for sessions
             createTableIfMissing: true,
             // Add connection error handling
@@ -160,34 +220,8 @@ async function initializeSessionStore() {
         }
         
         sessionStore = pgStore;
+        delegatingStore.setStore(pgStore);
         console.log('[SESSION STORE] PostgreSQL session store initialized successfully');
-        
-        // Update the session middleware's store reference if it's already been created
-        // This is a workaround for the async initialization
-        if (app && (app as any)._router) {
-            // Find the session middleware and update its store
-            const updateSessionStore = (middleware: any) => {
-                if (middleware && middleware.store && middleware.store !== pgStore) {
-                    console.log('[SESSION STORE] Updating session middleware store reference');
-                    middleware.store = pgStore;
-                }
-            };
-            // Try to find and update session middleware
-            try {
-                const router = (app as any)._router;
-                if (router && router.stack) {
-                    router.stack.forEach((layer: any) => {
-                        if (layer && layer.handle) {
-                            if (layer.handle.name === 'session' || (layer.handle.store && layer.handle.store === sessionStore)) {
-                                updateSessionStore(layer.handle);
-                            }
-                        }
-                    });
-                }
-            } catch (e) {
-                // Ignore errors - this is just a workaround
-            }
-        }
     } catch (error: any) {
         console.error('[SESSION STORE] Failed to initialize PostgreSQL store:', error.message || error);
         console.log('[SESSION STORE] Falling back to MemoryStore');
@@ -198,46 +232,14 @@ async function initializeSessionStore() {
     }
 }
 
-// Track session store initialization status
-let sessionStoreReady = false;
-const sessionStoreReadyPromise = initializeSessionStore()
-    .then(() => {
-        sessionStoreReady = true;
-        console.log('[SESSION STORE] Initialization complete, store is ready');
-    })
-    .catch((error) => {
-        console.error('[SESSION STORE] Initialization error:', error.message || error);
-        sessionStoreReady = true; // Mark as ready even if it failed (using MemoryStore fallback)
-        // Continue with MemoryStore
-    });
-
-// In production, wait for session store to be ready before accepting requests
-// This ensures sessions are saved to PostgreSQL from the start
-if (isProduction && DATABASE_URL) {
-    console.log('[SESSION STORE] Waiting for PostgreSQL session store to initialize...');
-    // Don't block server startup, but log a warning if it takes too long
-    sessionStoreReadyPromise.then(() => {
-        console.log('[SESSION STORE] PostgreSQL store ready, sessions will persist');
-    });
-}
-
-// Create a proxy store that always returns the current sessionStore
-// This allows the store to be updated after middleware creation
-const storeProxy = new Proxy(sessionStore, {
-    get(target, prop) {
-        // Always return from the current sessionStore (which may have been updated)
-        const currentStore = sessionStore;
-        if (prop === 'get' || prop === 'set' || prop === 'destroy' || prop === 'all') {
-            return (...args: any[]) => {
-                return (currentStore as any)[prop](...args);
-            };
-        }
-        return (currentStore as any)[prop];
-    }
+// Initialize session store asynchronously (non-blocking)
+// The DelegatingStore will automatically use the updated store once PostgreSQL initializes
+initializeSessionStore().catch((error) => {
+    console.error('[SESSION STORE] Initialization error:', error.message || error);
 });
 
 const sessionConfig: session.SessionOptions = {
-    store: storeProxy as any,
+    store: delegatingStore as any,
     secret: SESSION_SECRET,
     resave: true, // Force save on every request for cross-origin reliability
     saveUninitialized: false,

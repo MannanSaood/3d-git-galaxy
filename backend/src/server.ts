@@ -54,6 +54,10 @@ app.use(cors({
 }));
 app.use(express.json());
 
+// Note: Removed Partitioned cookie attribute - Firefox and Safari don't support it
+// Relying on standard SameSite=None; Secure for cross-origin cookies
+// Browsers that block third-party cookies will require user consent
+
 // Configure session store (PostgreSQL in production, MemoryStore in dev)
 const isProduction = process.env.NODE_ENV === 'production';
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
@@ -98,6 +102,7 @@ const sessionConfig: session.SessionOptions = {
     }
 };
 app.use(session(sessionConfig));
+console.log('[SESSION] Session middleware initialized (store:', isProduction && DATABASE_URL ? 'PostgreSQL' : 'Memory', ', cookie sameSite:', sessionConfig.cookie?.sameSite, ')');
 
 // Initialize Database
 initDb();
@@ -234,6 +239,7 @@ declare module 'express-session' {
 
 // GitHub OAuth: Initiate authentication
 app.get('/api/auth/github', (req: express.Request, res: express.Response) => {
+    console.log('[OAUTH START]', { sid: req.sessionID, hasState: !!req.session.state });
     // Debug: Log whether credentials are loaded (without exposing secrets)
     if (!GITHUB_CLIENT_ID || !GITHUB_CLIENT_SECRET) {
         // GitHub OAuth not configured
@@ -255,12 +261,14 @@ app.get('/api/auth/github', (req: express.Request, res: express.Response) => {
     req.session.save((err) => {
         if (err) return res.status(500).send('Failed to initialize session');
         const authUrl = `https://github.com/login/oauth/authorize?client_id=${GITHUB_CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=repo&state=${state}`;
+        console.log('[OAUTH START] redirecting to GitHub');
         res.redirect(authUrl);
     });
 });
 
 // GitHub OAuth: Handle callback
 app.get('/api/auth/github/callback', async (req: express.Request, res: express.Response) => {
+    console.log('[OAUTH CB] hit', { sid: req.sessionID });
     const { code, state } = req.query;
     
     // Validate state
@@ -319,6 +327,7 @@ app.get('/api/auth/github/callback', async (req: express.Request, res: express.R
             req.session.user = userData;
             req.session.state = undefined;
             req.session.save(() => {
+                console.log('[OAUTH CB] session saved, sending HTML redirect');
                 // Send small HTML page to ensure Set-Cookie is processed before navigation
                 const redirectTarget = FRONTEND_URL + '?authenticated=true';
                 res.send(`<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0;url=${redirectTarget}"></head><body><a href="${redirectTarget}">Continue</a></body></html>`);
@@ -334,6 +343,9 @@ app.get('/api/auth/github/callback', async (req: express.Request, res: express.R
 
 // Check authentication status
 app.get('/api/auth/status', (req: express.Request, res: express.Response) => {
+    const hasCookie = !!(req.headers.cookie);
+    const keys = Object.keys(req.session || {});
+    console.log('[AUTH STATUS]', { sid: req.sessionID, hasCookie, keys });
     if (req.session.access_token && req.session.user) {
         res.json({
             authenticated: true,
@@ -376,7 +388,23 @@ app.get('/api/user/repos', async (req: express.Request, res: express.Response) =
         }
         
         const repos = await reposResponse.json() as any[];
-        const reposWithLayout = calculateConstellationLayout(repos);
+        
+        // Filter repos updated within last 2 months (for connection logic)
+        const twoMonthsAgo = new Date();
+        twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2);
+        const recentRepos = repos.filter((repo: any) => {
+            const updatedAt = new Date(repo.updated_at);
+            return updatedAt >= twoMonthsAgo;
+        });
+        
+        // Add metadata for connection logic
+        const reposWithMetadata = repos.map((repo: any) => ({
+            ...repo,
+            isRecent: new Date(repo.updated_at) >= twoMonthsAgo,
+            updated_at: repo.updated_at
+        }));
+        
+        const reposWithLayout = calculateConstellationLayout(reposWithMetadata);
         
         res.json(reposWithLayout);
     } catch (error) {
@@ -450,6 +478,14 @@ async function processRepoAnalysis(repoUrl: string, jobId: string, accessToken?:
         const authors = Array.from(authorMap.entries()).map(([name, count]) => ({ name, commitCount: count }));
 
         const result = { repoData, authors };
+        
+        // Validate result structure
+        if (!repoData || typeof repoData !== 'object' || Object.keys(repoData).length === 0) {
+            updateJobStatus(jobId, 'failed', undefined, 'Generated repository data is empty or invalid');
+            return;
+        }
+        
+        console.log(`[REPO ANALYSIS] Completed for ${repoUrl}: ${Object.keys(repoData).length} commits, ${authors.length} authors`);
         storeRepo(repoUrl, result);
         updateJobStatus(jobId, 'complete', result);
 

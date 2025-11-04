@@ -243,7 +243,26 @@ const App: React.FC = () => {
             if (status.status === 'complete') {
               clearInterval(pollInterval);
               const data = status.result;
-              setRepoData(data.repoData || data);
+              const repoDataToSet = data.repoData || data;
+              
+              // Validate repoData structure
+              if (!repoDataToSet || typeof repoDataToSet !== 'object') {
+                clearInterval(pollInterval);
+                setIsLoading(false);
+                setError('Invalid repository data received');
+                return;
+              }
+              
+              const commitCount = Object.keys(repoDataToSet).length;
+              if (commitCount === 0) {
+                clearInterval(pollInterval);
+                setIsLoading(false);
+                setError('Repository appears to be empty');
+                return;
+              }
+              
+              console.log('[FRONTEND] Setting repo data:', { commitCount, hasAuthors: !!(data.authors) });
+              setRepoData(repoDataToSet);
               setAuthors(data.authors || []);
               setCurrentRepoUrl(repoUrl);
               setFilteredAuthor(null);

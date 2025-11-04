@@ -149,7 +149,11 @@ const ConstellationCanvas: React.FC<ConstellationCanvasProps> = ({ repos, onRepo
         const pos2 = new THREE.Vector3(...repo2.pos);
         const distance = pos1.distanceTo(pos2);
         
-        if (distance <= maxConnectionDistance) {
+        // Only connect repos that were updated within last 2 months
+        const repo1Recent = repo1.isRecent !== false; // Default to true if not specified
+        const repo2Recent = repo2.isRecent !== false;
+        
+        if (distance <= maxConnectionDistance && repo1Recent && repo2Recent) {
           connections.push({ repo: repo2, distance });
         }
       }

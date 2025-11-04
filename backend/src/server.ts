@@ -5,6 +5,7 @@ import path from 'path';
 import { exec } from 'child_process';
 import { promises as fs } from 'fs';
 import os from 'os';
+import { EventEmitter } from 'events';
 import type { RepoData, CommitNode } from './types';
 import { fileURLToPath } from 'url';
 import session from 'express-session';
@@ -119,15 +120,35 @@ let sessionStore: any = new session.MemoryStore();
 
 // Wrapper store that delegates to the current sessionStore
 // This allows the store to be updated after middleware creation
-class DelegatingStore {
+// Must extend EventEmitter because express-session expects store.on('disconnect')
+class DelegatingStore extends EventEmitter {
     private currentStore: any;
     
     constructor(initialStore: any) {
+        super();
         this.currentStore = initialStore;
+        
+        // Forward events from the underlying store
+        if (this.currentStore && typeof this.currentStore.on === 'function') {
+            this.currentStore.on('disconnect', () => this.emit('disconnect'));
+            this.currentStore.on('connect', () => this.emit('connect'));
+        }
     }
     
     setStore(store: any) {
+        // Remove listeners from old store
+        if (this.currentStore && typeof this.currentStore.removeAllListeners === 'function') {
+            this.currentStore.removeAllListeners('disconnect');
+            this.currentStore.removeAllListeners('connect');
+        }
+        
         this.currentStore = store;
+        
+        // Forward events from new store
+        if (this.currentStore && typeof this.currentStore.on === 'function') {
+            this.currentStore.on('disconnect', () => this.emit('disconnect'));
+            this.currentStore.on('connect', () => this.emit('connect'));
+        }
     }
     
     get(sid: string, callback: (err: any, session?: any) => void) {

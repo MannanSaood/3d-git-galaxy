@@ -264,15 +264,25 @@ app.use((req: express.Request, res: express.Response, next: express.NextFunction
         // Intercept Set-Cookie headers before response is sent
         const setCookieHeaders = res.getHeader('Set-Cookie');
         if (isProduction && setCookieHeaders) {
-            const cookies = Array.isArray(setCookieHeaders) ? setCookieHeaders : [setCookieHeaders];
-            const modifiedCookies = cookies.map((cookie: string) => {
+            // Handle different return types from getHeader
+            let cookieArray: string[] = [];
+            if (Array.isArray(setCookieHeaders)) {
+                cookieArray = setCookieHeaders.filter((h): h is string => typeof h === 'string');
+            } else if (typeof setCookieHeaders === 'string') {
+                cookieArray = [setCookieHeaders];
+            }
+            
+            const modifiedCookies = cookieArray.map((cookie: string) => {
                 // Add Partitioned attribute if it's our session cookie and doesn't already have it
                 if (cookie.includes('gitgalaxy.sid=') && !cookie.includes('Partitioned')) {
                     return cookie + '; Partitioned';
                 }
                 return cookie;
             });
-            res.setHeader('Set-Cookie', modifiedCookies);
+            
+            if (modifiedCookies.length > 0) {
+                res.setHeader('Set-Cookie', modifiedCookies);
+            }
         }
         return originalEnd.call(this, chunk, encoding, cb);
     };

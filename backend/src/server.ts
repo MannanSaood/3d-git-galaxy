@@ -344,13 +344,33 @@ app.use((req: express.Request, res: express.Response, next: express.NextFunction
             const modifiedCookies = cookieArray.map((cookie: string) => {
                 // Add Partitioned attribute if it's our session cookie and doesn't already have it
                 if (cookie.includes('gitgalaxy.sid=') && !cookie.includes('Partitioned')) {
-                    return cookie + '; Partitioned';
+                    const partitioned = cookie + '; Partitioned';
+                    console.log('[COOKIE] Adding Partitioned attribute to session cookie', {
+                        originalLength: cookie.length,
+                        newLength: partitioned.length,
+                        hasPartitioned: partitioned.includes('Partitioned')
+                    });
+                    return partitioned;
                 }
                 return cookie;
             });
             
             if (modifiedCookies.length > 0) {
                 res.setHeader('Set-Cookie', modifiedCookies);
+                console.log('[COOKIE] Set-Cookie header modified', {
+                    cookieCount: modifiedCookies.length,
+                    firstCookiePreview: modifiedCookies[0]?.substring(0, 150)
+                });
+            }
+        } else if (isProduction && !setCookieHeaders) {
+            // Log when Set-Cookie is not present (for debugging)
+            if (req.path.includes('/auth/') || req.path.includes('/callback')) {
+                console.log('[COOKIE] No Set-Cookie header found', {
+                    path: req.path,
+                    method: req.method,
+                    hasSession: !!req.session,
+                    sessionId: req.sessionID
+                });
             }
         }
         return originalEnd.call(this, chunk, encoding, cb);
@@ -786,13 +806,24 @@ app.get('/api/auth/github/callback', async (req: express.Request, res: express.R
             // For cross-origin cookies, use an HTML redirect page instead of res.redirect()
             // This ensures the cookie is set before navigation
             const frontendUrl = (FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
-            console.log('[OAUTH CALLBACK] Redirecting to frontend', {
-                frontendUrl,
-                sessionId: req.sessionID
-            });
-            
-            // Send HTML page with immediate redirect to ensure cookie is set
-            res.send(`
+            // Force save session one more time and wait for it before redirecting
+            req.session.save((saveErr) => {
+                if (saveErr) {
+                    console.error('[OAUTH CALLBACK] Final session save error:', saveErr);
+                }
+                
+                // Log cookie headers before redirect
+                const setCookieHeaders = res.getHeader('Set-Cookie');
+                console.log('[OAUTH CALLBACK] Redirecting to frontend', {
+                    frontendUrl,
+                    sessionId: req.sessionID,
+                    hasSetCookie: !!setCookieHeaders,
+                    setCookieCount: Array.isArray(setCookieHeaders) ? setCookieHeaders.length : (setCookieHeaders ? 1 : 0),
+                    setCookiePreview: setCookieHeaders ? (Array.isArray(setCookieHeaders) ? setCookieHeaders[0]?.toString().substring(0, 150) : setCookieHeaders.toString().substring(0, 150)) : 'none'
+                });
+                
+                // Send HTML page with immediate redirect to ensure cookie is set
+                res.send(`
 <!DOCTYPE html>
 <html>
 <head>

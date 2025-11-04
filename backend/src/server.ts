@@ -189,6 +189,9 @@ const sessionConfig: session.SessionOptions = {
         httpOnly: true,
         maxAge: 24 * 60 * 60 * 1000, // 24 hours
         sameSite: isProduction ? 'none' : 'lax', // 'none' for cross-origin in production, 'lax' for development
+        // Use Partitioned cookies (CHIPS) so modern browsers accept cross-site cookies
+        // when used in third-party contexts (cross-origin frontend -> backend requests)
+        partitioned: isProduction,
         path: '/', // Explicit path
         // Don't set domain - let browser handle it for cross-origin
     }

@@ -27,17 +27,35 @@ const themePalettes: Record<string, THREE.Color[]> = {
 };
 
 export const buildGraph = (scene: THREE.Scene, repoData: RepoData, settings: Settings) => {
+  console.log('[buildGraph] Starting graph build with', Object.keys(repoData).length, 'commits');
+  
   const commitPositions: number[] = [];
   const commitObjects = new THREE.Group();
   const branchObjects = new THREE.Group();
   
   const commitHashes = Object.keys(repoData);
+  
+  if (commitHashes.length === 0) {
+    console.error('[buildGraph] No commits found in repoData!');
+    return { commitObjects, branchObjects, commitHashes: [] };
+  }
 
   // Create Commits (Stars)
   for (const hash of commitHashes) {
     const commit = repoData[hash];
+    if (!commit || !commit.pos || !Array.isArray(commit.pos) || commit.pos.length !== 3) {
+      console.warn('[buildGraph] Invalid commit data for hash:', hash, commit);
+      continue;
+    }
     commitPositions.push(...commit.pos);
   }
+  
+  if (commitPositions.length === 0) {
+    console.error('[buildGraph] No valid commit positions found!');
+    return { commitObjects, branchObjects, commitHashes: [] };
+  }
+  
+  console.log('[buildGraph] Created', commitPositions.length / 3, 'commit positions');
   
   const pointsGeometry = new THREE.BufferGeometry();
   pointsGeometry.setAttribute('position', new THREE.Float32BufferAttribute(commitPositions, 3));

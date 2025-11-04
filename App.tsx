@@ -326,6 +326,9 @@ const App: React.FC = () => {
   };
 
   const handleRepoSelect = (repo: ConstellationRepo) => {
+    console.log('[App] Repo selected from constellation:', repo.name, repo.clone_url);
+    setRepoData(null); // Clear previous data
+    setError(null);
     handleAnalyzeRepo(repo.clone_url);
   };
 

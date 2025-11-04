@@ -108,7 +108,26 @@ const GitGalaxyCanvas: React.FC<GitGalaxyCanvasProps> = ({
 
   // Only rebuild scene when repoData, theme, or pullRequests change
   useEffect(() => {
-    if (!canvasRef.current || !repoData || !settings) return;
+    if (!canvasRef.current) {
+      console.warn('[GitGalaxyCanvas] No canvas ref');
+      return;
+    }
+    if (!repoData) {
+      console.warn('[GitGalaxyCanvas] No repoData provided');
+      return;
+    }
+    if (!settings) {
+      console.warn('[GitGalaxyCanvas] No settings provided');
+      return;
+    }
+    
+    const commitCount = Object.keys(repoData).length;
+    console.log('[GitGalaxyCanvas] Building graph with', commitCount, 'commits');
+    
+    if (commitCount === 0) {
+      console.error('[GitGalaxyCanvas] repoData is empty!');
+      return;
+    }
 
     // Clean up previous scene if it exists
     if (stateRef.current.scene && stateRef.current.renderer) {

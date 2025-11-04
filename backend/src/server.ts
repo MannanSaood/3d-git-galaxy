@@ -327,7 +327,14 @@ app.get('/api/auth/github/callback', async (req: express.Request, res: express.R
             req.session.user = userData;
             req.session.state = undefined;
             req.session.save(() => {
-                console.log('[OAUTH CB] session saved, sending HTML redirect');
+                // Check if cookie was actually set
+                const setCookieHeaders = res.getHeader('Set-Cookie');
+                console.log('[OAUTH CB] session saved, sending HTML redirect', {
+                    sessionId: req.sessionID,
+                    hasSetCookie: !!setCookieHeaders,
+                    cookiePreview: setCookieHeaders ? (Array.isArray(setCookieHeaders) ? setCookieHeaders[0]?.toString().substring(0, 100) : setCookieHeaders.toString().substring(0, 100)) : 'none'
+                });
+                
                 // Send small HTML page to ensure Set-Cookie is processed before navigation
                 const redirectTarget = FRONTEND_URL + '?authenticated=true';
                 res.send(`<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0;url=${redirectTarget}"></head><body><a href="${redirectTarget}">Continue</a></body></html>`);

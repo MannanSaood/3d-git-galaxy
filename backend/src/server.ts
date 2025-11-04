@@ -5,11 +5,12 @@ import path from 'path';
 import { exec } from 'child_process';
 import { promises as fs } from 'fs';
 import os from 'os';
-import { EventEmitter } from 'events';
 import type { RepoData, CommitNode } from './types';
-import { fileURLToPath } from 'url';
-import session from 'express-session';
 import crypto from 'crypto';
+import session from 'express-session';
+import { fileURLToPath } from 'url';
+// trust proxy is required for secure cookies behind a load balancer
+app.set('trust proxy', 1);
 import dotenv from 'dotenv';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { initDb, getRepo, storeRepo } from './database.js';
@@ -17,9 +18,6 @@ import { addJob, getJobStatus, updateJobStatus } from './jobQueue.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
-
-// Get DATABASE_URL for session config (same as database.ts uses)
-const DATABASE_URL = process.env.DATABASE_URL;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -43,439 +41,66 @@ try {
     // .env doesn't exist, that's okay
 }
 
-// Configure CORS to allow credentials and Vercel frontend
-// Normalize FRONTEND_URL by removing trailing slash (browsers send origin without trailing slash)
-const FRONTEND_URL_FOR_CORS = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+// Configure CORS to allow credentials (frontend env var must match)
+const FRONTEND_URL = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
 app.use(cors({
-    origin: function (origin, callback) {
-        // Allow requests with no origin (like mobile apps or curl requests)
+    origin: function(origin, callback) {
         if (!origin) return callback(null, true);
-        
-        // Normalize origin by removing trailing slash
-        const normalizedOrigin = origin.replace(/\/$/, '');
-        
-        // Check if origin matches allowed frontend URL exactly
-        if (normalizedOrigin === FRONTEND_URL_FOR_CORS) {
-            callback(null, true);
-            return;
-        }
-        
-        // In production, allow Vercel preview deployments
-        // Vercel preview URLs: https://3d-git-galaxy-*-*-*.vercel.app (can have multiple segments)
-        // Vercel production URL: https://3d-git-galaxy.vercel.app
-        if (process.env.NODE_ENV === 'production' && FRONTEND_URL_FOR_CORS.includes('vercel.app')) {
-            // Extract base domain from FRONTEND_URL (e.g., "3d-git-galaxy" from "https://3d-git-galaxy.vercel.app")
-            const frontendUrlMatch = FRONTEND_URL_FOR_CORS.match(/https?:\/\/([^.]+)\.vercel\.app/);
-            if (frontendUrlMatch) {
-                const baseDomain = frontendUrlMatch[1];
-                // Check if origin is a Vercel deployment (production or preview)
-                // Preview URLs can have multiple segments: baseDomain-segment1-segment2-...
-                // Escape the baseDomain for regex (it might contain special chars)
-                const escapedBaseDomain = baseDomain.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                // Match: baseDomain or baseDomain-segments (where segments are alphanumeric/hyphens)
-                // Example: 3d-git-galaxy or 3d-git-galaxy-4tcldct5v-mannansaoods-projects
-                const vercelPattern = new RegExp(`^https://${escapedBaseDomain}(-[a-zA-Z0-9-]+)*\\.vercel\\.app$`);
-                if (vercelPattern.test(normalizedOrigin)) {
-                    callback(null, true);
-                    return;
-                }
-            }
-        }
-        
-        // In development, allow localhost with any port
-        if (process.env.NODE_ENV === 'development') {
-            if (normalizedOrigin.startsWith('http://localhost:') || normalizedOrigin.startsWith('http://127.0.0.1:')) {
-                callback(null, true);
-                return;
-            }
-        }
-        
-        // Reject all other origins
-        callback(new Error(`CORS: Origin ${normalizedOrigin} not allowed. Expected ${FRONTEND_URL_FOR_CORS} or Vercel preview deployment`));
+        const normalized = origin.replace(/\/$/, '');
+        if (normalized === FRONTEND_URL) return callback(null, true);
+        return callback(new Error(`CORS: Origin ${normalized} not allowed`));
     },
     credentials: true
 }));
 app.use(express.json());
 
-// Trust proxy (required for Koyeb/cloud platforms with load balancers)
-app.set('trust proxy', 1);
-
-// Configure session middleware
+// Configure session store (PostgreSQL in production, MemoryStore in dev)
 const isProduction = process.env.NODE_ENV === 'production';
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+const DATABASE_URL = process.env.DATABASE_URL || process.env.DATABASE_URL_INTERNAL;
 
-// Debug logging
-console.log('[SESSION CONFIG]', {
-    isProduction,
-    hasSessionSecret: !!process.env.SESSION_SECRET,
-    sessionSecretLength: SESSION_SECRET.length,
-    nodeEnv: process.env.NODE_ENV,
-    port: PORT,
-    hasDatabaseUrl: !!DATABASE_URL
-});
-
-// Configure session store - use PostgreSQL if available, otherwise MemoryStore (dev only)
-// Initialize synchronously first, then upgrade to PostgreSQL if needed
-let sessionStore: any = new session.MemoryStore();
-
-// Wrapper store that delegates to the current sessionStore
-// This allows the store to be updated after middleware creation
-// Must extend EventEmitter because express-session expects store.on('disconnect')
-class DelegatingStore extends EventEmitter {
-    // Use public accessor so Proxy can access it
-    public currentStore: any;
-    
-    constructor(initialStore: any) {
-        super();
-        this.currentStore = initialStore;
-        
-        // Forward events from the underlying store
-        if (this.currentStore && typeof this.currentStore.on === 'function') {
-            this.currentStore.on('disconnect', () => this.emit('disconnect'));
-            this.currentStore.on('connect', () => this.emit('connect'));
-        }
-    }
-    
-    setStore(store: any) {
-        // Remove listeners from old store
-        if (this.currentStore && typeof this.currentStore.removeAllListeners === 'function') {
-            this.currentStore.removeAllListeners('disconnect');
-            this.currentStore.removeAllListeners('connect');
-        }
-        
-        this.currentStore = store;
-        
-        // Forward events from new store
-        if (this.currentStore && typeof this.currentStore.on === 'function') {
-            this.currentStore.on('disconnect', () => this.emit('disconnect'));
-            this.currentStore.on('connect', () => this.emit('connect'));
-        }
-    }
-    
-    get(sid: string, callback: (err: any, session?: any) => void) {
-        return this.currentStore.get(sid, callback);
-    }
-    
-    set(sid: string, session: any, callback?: (err?: any) => void) {
-        return this.currentStore.set(sid, session, callback);
-    }
-    
-    destroy(sid: string, callback?: (err?: any) => void) {
-        return this.currentStore.destroy(sid, callback);
-    }
-    
-    all(callback: (err: any, sessions?: any) => void) {
-        return this.currentStore.all(callback);
-    }
-    
-    length(callback: (err: any, length?: number) => void) {
-        return this.currentStore.length(callback);
-    }
-    
-    clear(callback?: (err?: any) => void) {
-        return this.currentStore.clear(callback);
-    }
-    
-    touch(sid: string, session: any, callback?: (err?: any) => void) {
-        return this.currentStore.touch(sid, session, callback);
-    }
-    
-    generate(req: any) {
-        if (this.currentStore.generate) {
-            return this.currentStore.generate(req);
-        }
-        // Fallback: generate session ID using crypto (same as express-session default)
-        return crypto.randomBytes(24).toString('base64url');
-    }
-    
-    // Additional methods that express-session might call
-    createSession(req: any, sess: any) {
-        if (this.currentStore.createSession) {
-            return this.currentStore.createSession(req, sess);
-        }
-        // Fallback: return the session as-is if createSession is not implemented
-        return sess;
-    }
-    
-    // Proxy any other method calls to the current store using a getter
-    // This handles any other methods we might have missed
-    getProperty(prop: string): any {
-        if (prop in this) {
-            return (this as any)[prop];
-        }
-        if (this.currentStore && typeof this.currentStore[prop] === 'function') {
-            return (...args: any[]) => (this.currentStore as any)[prop](...args);
-        }
-        return this.currentStore?.[prop];
-    }
-}
-
-// Create a Proxy wrapper that forwards all property access to the store
-const createDelegatingStoreProxy = (store: DelegatingStore): any => {
-    return new Proxy(store, {
-        get(target, prop: string | symbol) {
-            // Handle Symbol properties (like Symbol.toStringTag)
-            if (typeof prop === 'symbol') {
-                return (target as any)[prop];
-            }
-            
-            // If the property exists on the DelegatingStore, return it
-            if (prop in target) {
-                return (target as any)[prop];
-            }
-            
-            // Otherwise, forward to the current store
-            const currentStore = (target as any).currentStore;
-            if (currentStore && typeof currentStore[prop] === 'function') {
-                return (...args: any[]) => currentStore[prop](...args);
-            }
-            return currentStore?.[prop];
-        }
-    });
-};
-
-const delegatingStore = createDelegatingStoreProxy(new DelegatingStore(sessionStore));
-
-// Async function to initialize PostgreSQL session store if DATABASE_URL is available
-async function initializeSessionStore() {
-    if (!DATABASE_URL) {
-        // Use MemoryStore only for development (with warning)
-        console.log('[SESSION STORE] Using MemoryStore (no DATABASE_URL found)');
-        if (isProduction) {
-            console.error('[SESSION STORE] WARNING: Using MemoryStore in production! This will cause session issues!');
-            console.error('[SESSION STORE] Please set DATABASE_URL environment variable!');
-        }
-        return;
-    }
-
-    // Use PostgreSQL session store if DATABASE_URL is available
-    console.log('[SESSION STORE] Attempting to use PostgreSQL session store');
-    console.log('[SESSION STORE] DATABASE_URL present:', DATABASE_URL.substring(0, 20) + '...');
+let store: session.Store;
+if (isProduction && DATABASE_URL) {
+    // Add sslmode=require if missing
+    const conString = DATABASE_URL.includes('sslmode=')
+        ? DATABASE_URL
+        : `${DATABASE_URL}${DATABASE_URL.includes('?') ? '&' : '?'}sslmode=require`;
     try {
-        // Dynamic import to avoid TypeScript module resolution issues in Docker build
-        // TypeScript may not resolve this at compile time, but it will work at runtime
-        const connectPgSimple = (await import('connect-pg-simple') as any).default;
-        const PgSessionStore = connectPgSimple(session);
-        // Add SSL mode to connection string if not already present
-        let connectionString = DATABASE_URL;
-        if (connectionString && !connectionString.includes('sslmode=')) {
-            const separator = connectionString.includes('?') ? '&' : '?';
-            connectionString = `${connectionString}${separator}sslmode=require`;
-            console.log('[SESSION STORE] Added sslmode=require to connection string');
-        }
-        
-        const pgStore = new PgSessionStore({
-            conString: connectionString,
-            tableName: 'user_sessions', // Table name for sessions
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const connectPgSimple = (await import('connect-pg-simple')).default;
+        const PgStore = connectPgSimple(session);
+        store = new PgStore({
+            conString,
+            tableName: 'user_sessions',
             createTableIfMissing: true,
-            // Add connection error handling
-            errorLog: (error: Error) => {
-                console.error('[SESSION STORE] PostgreSQL connection error:', error.message);
-                // Don't let this crash the app
-            }
-        });
-        
-        // Add error event handlers to session store
-        if (pgStore && typeof (pgStore as any).client === 'object') {
-            const client = (pgStore as any).client;
-            if (client && typeof client.on === 'function') {
-                client.on('error', (err: Error) => {
-                    console.error('[SESSION STORE] PostgreSQL client error:', err.message);
-                    // Reset connection - it will retry on next operation
-                });
-            }
-        }
-        
-        sessionStore = pgStore;
-        delegatingStore.setStore(pgStore);
-        console.log('[SESSION STORE] PostgreSQL session store initialized successfully');
-    } catch (error: any) {
-        console.error('[SESSION STORE] Failed to initialize PostgreSQL store:', error.message || error);
-        console.log('[SESSION STORE] Falling back to MemoryStore');
-        if (isProduction) {
-            console.error('[SESSION STORE] WARNING: Using MemoryStore in production! Sessions will not persist!');
-        }
-        // Keep MemoryStore as fallback
+        }) as unknown as session.Store;
+    } catch (e) {
+        // Fallback to MemoryStore if pg store fails to initialize
+        store = new session.MemoryStore();
     }
+} else {
+    store = new session.MemoryStore();
 }
-
-// Initialize session store asynchronously (non-blocking)
-// The DelegatingStore will automatically use the updated store once PostgreSQL initializes
-initializeSessionStore().catch((error) => {
-    console.error('[SESSION STORE] Initialization error:', error.message || error);
-});
 
 const sessionConfig: session.SessionOptions = {
-    store: delegatingStore as any,
+    store,
     secret: SESSION_SECRET,
-    resave: true, // Force save on every request for cross-origin reliability
+    resave: true,
     saveUninitialized: false,
-    rolling: true, // Reset expiration on every request
-    name: 'gitgalaxy.sid', // Use a custom name instead of default 'connect.sid'
+    rolling: true,
+    name: 'gitgalaxy.sid',
     cookie: {
-        secure: isProduction, // Use secure cookies in production (HTTPS required)
+        secure: isProduction,
         httpOnly: true,
-        maxAge: 24 * 60 * 60 * 1000, // 24 hours
-        sameSite: isProduction ? 'none' : 'lax', // 'none' for cross-origin in production, 'lax' for development
-        path: '/', // Explicit path
-        // Don't set domain - let browser handle it for cross-origin
+        maxAge: 24 * 60 * 60 * 1000,
+        sameSite: isProduction ? 'none' : 'lax',
+        path: '/',
     }
 };
-
 app.use(session(sessionConfig));
-console.log('[SESSION] Middleware configured with', DATABASE_URL ? 'PostgreSQL store' : 'MemoryStore');
 
-// Middleware to manually add Partitioned attribute to Set-Cookie headers (for CHIPS support)
-// express-session doesn't support the partitioned option directly
-app.use((req: express.Request, res: express.Response, next: express.NextFunction) => {
-    const originalEnd = res.end;
-    res.end = function(chunk?: any, encoding?: any, cb?: any) {
-        // Intercept Set-Cookie headers before response is sent
-        const setCookieHeaders = res.getHeader('Set-Cookie');
-        if (isProduction && setCookieHeaders) {
-            // Handle different return types from getHeader
-            let cookieArray: string[] = [];
-            if (Array.isArray(setCookieHeaders)) {
-                cookieArray = setCookieHeaders.filter((h): h is string => typeof h === 'string');
-            } else if (typeof setCookieHeaders === 'string') {
-                cookieArray = [setCookieHeaders];
-            }
-            
-            const modifiedCookies = cookieArray.map((cookie: string) => {
-                // Add Partitioned attribute if it's our session cookie and doesn't already have it
-                if (cookie.includes('gitgalaxy.sid=') && !cookie.includes('Partitioned')) {
-                    const partitioned = cookie + '; Partitioned';
-                    console.log('[COOKIE] Adding Partitioned attribute to session cookie', {
-                        originalLength: cookie.length,
-                        newLength: partitioned.length,
-                        hasPartitioned: partitioned.includes('Partitioned')
-                    });
-                    return partitioned;
-                }
-                return cookie;
-            });
-            
-            if (modifiedCookies.length > 0) {
-                res.setHeader('Set-Cookie', modifiedCookies);
-                console.log('[COOKIE] Set-Cookie header modified', {
-                    cookieCount: modifiedCookies.length,
-                    firstCookiePreview: modifiedCookies[0]?.substring(0, 150)
-                });
-            }
-        } else if (isProduction && !setCookieHeaders) {
-            // Log when Set-Cookie is not present (for debugging)
-            if (req.path.includes('/auth/') || req.path.includes('/callback')) {
-                console.log('[COOKIE] No Set-Cookie header found', {
-                    path: req.path,
-                    method: req.method,
-                    hasSession: !!req.session,
-                    sessionId: req.sessionID
-                });
-            }
-        }
-        return originalEnd.call(this, chunk, encoding, cb);
-    };
-    next();
-});
-
-// Middleware to log session store operations and verify store usage
-app.use((req: express.Request, res: express.Response, next: express.NextFunction) => {
-    const sessionId = req.sessionID;
-    const hasSession = !!req.session;
-    const sessionKeys = hasSession ? Object.keys(req.session) : [];
-    const cookies = req.headers.cookie || 'none';
-    
-    // Check what store is actually being used
-    const sessionMiddleware = (req as any).sessionStore || (sessionConfig as any).store;
-    const storeType = sessionStore && sessionStore !== (new session.MemoryStore()) ? 'PostgreSQL' : 'MemoryStore';
-    const isUsingPgStore = DATABASE_URL && sessionStore && typeof (sessionStore as any).client !== 'undefined';
-    
-    console.log('[SESSION REQUEST]', req.method, req.path, {
-        sessionId: sessionId,
-        hasSession: hasSession,
-        hasState: hasSession && 'state' in req.session ? !!req.session.state : false,
-        hasAccessToken: hasSession && 'accessToken' in req.session ? !!req.session.accessToken : false,
-        cookies: cookies.length > 100 ? cookies.substring(0, 100) + '...' : cookies,
-        origin: req.headers.origin,
-        referer: req.headers.referer,
-        storeType: storeType,
-        isUsingPgStore: isUsingPgStore,
-        hasDatabaseUrl: !!DATABASE_URL
-    });
-    
-    // Wrap req.session.save to log when sessions are saved
-    if (hasSession && req.session.save) {
-        const originalSave = req.session.save.bind(req.session);
-        req.session.save = function(callback?: (err?: any) => void) {
-            console.log('[SESSION SAVE] Saving session', {
-                sessionId: sessionId,
-                storeType: storeType,
-                sessionKeys: Object.keys(req.session || {}),
-                hasState: 'state' in (req.session || {}),
-                hasAccessToken: 'accessToken' in (req.session || {})
-            });
-            return originalSave(callback);
-        };
-    }
-    
-    next();
-});
-
-// Handle unhandled PostgreSQL errors gracefully
-process.on('unhandledRejection', (reason: any, promise) => {
-    if (reason?.code === '57P01' || reason?.code === 'ECONNRESET' || reason?.message?.includes('terminating connection')) {
-        console.error('[DATABASE] Connection terminated (unhandled rejection), but continuing...', reason.message || reason);
-        // Don't crash - this might be a temporary connection issue
-        return;
-    }
-    console.error('[UNHANDLED REJECTION]', reason);
-});
-
-// Handle uncaught exceptions (like PostgreSQL client errors)
-process.on('uncaughtException', (error: Error) => {
-    if (error.message?.includes('terminating connection') || (error as any).code === '57P01') {
-        console.error('[DATABASE] Connection terminated (uncaught exception), but continuing...', error.message);
-        // Don't crash - connection will be retried
-        return;
-    }
-    console.error('[UNCAUGHT EXCEPTION]', error);
-    // For other errors, we might want to exit gracefully
-    // But for database connection errors, we'll continue
-});
-
-// Handle database connection errors in session store
-if (sessionStore && typeof sessionStore.on === 'function') {
-    sessionStore.on('connect', () => {
-        console.log('[SESSION STORE] Connected to PostgreSQL');
-    });
-    sessionStore.on('error', (error: Error) => {
-        console.error('[SESSION STORE] Error:', error.message);
-        // Don't crash - fallback to memory-based behavior
-    });
-}
-
-// Log session middleware info
-app.use((req, res, next) => {
-    if (req.path === '/api/auth/github' || req.path === '/api/auth/github/callback' || req.path === '/api/auth/status') {
-        console.log(`[SESSION REQUEST] ${req.method} ${req.path}`, {
-            sessionId: req.sessionID,
-            hasSession: !!req.session,
-            hasState: !!(req.session && req.session.state),
-            hasAccessToken: !!(req.session && req.session.access_token),
-            cookies: req.headers.cookie ? req.headers.cookie.substring(0, 50) + '...' : 'none',
-            origin: req.headers.origin,
-            referer: req.headers.referer
-        });
-    }
-    next();
-});
-
-// Initialize Database (async)
-initDb().catch((err) => {
-    if (process.env.NODE_ENV === 'development') {
-        console.error('Database initialization error:', err);
-    }
-});
+// Initialize Database
+initDb();
 
 // Initialize Gemini AI client
 let genAI: GoogleGenerativeAI | null = null;
@@ -596,17 +221,7 @@ const calculateLayout = (commits: Map<string, { parentHashes: string[], message:
 // Trim whitespace from environment variables (in case .env file has spaces)
 const GITHUB_CLIENT_ID = (process.env.GITHUB_CLIENT_ID || '').trim();
 const GITHUB_CLIENT_SECRET = (process.env.GITHUB_CLIENT_SECRET || '').trim();
-const REDIRECT_URI = process.env.REDIRECT_URI || 'http://localhost:3001/api/auth/github/callback';
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
-
-// Debug OAuth configuration
-console.log('[OAUTH CONFIG]', {
-    hasClientId: !!process.env.GITHUB_CLIENT_ID,
-    hasClientSecret: !!process.env.GITHUB_CLIENT_SECRET,
-    redirectUri: REDIRECT_URI,
-    frontendUrl: FRONTEND_URL,
-    isProduction
-});
+const REDIRECT_URI = (process.env.REDIRECT_URI || 'http://localhost:3001/api/auth/github/callback').replace(/\/$/, '');
 
 // Declare session type for TypeScript
 declare module 'express-session' {
@@ -619,12 +234,6 @@ declare module 'express-session' {
 
 // GitHub OAuth: Initiate authentication
 app.get('/api/auth/github', (req: express.Request, res: express.Response) => {
-    console.log('[OAUTH START] Request received', {
-        sessionId: req.sessionID,
-        hasExistingSession: !!req.session && Object.keys(req.session).length > 0,
-        ip: req.ip,
-        origin: req.headers.origin
-    });
     // Debug: Log whether credentials are loaded (without exposing secrets)
     if (!GITHUB_CLIENT_ID || !GITHUB_CLIENT_SECRET) {
         // GitHub OAuth not configured
@@ -641,33 +250,11 @@ app.get('/api/auth/github', (req: express.Request, res: express.Response) => {
     
     // Generate random state string
     const state = crypto.randomBytes(32).toString('hex');
-    console.log('[OAUTH START] Generated state:', state.substring(0, 8) + '...');
-    
-    // Set state first (before regeneration to ensure it's in the session)
     req.session.state = state;
-    
-    // Save session before redirecting (critical for cross-origin)
+    // Save session before redirect to ensure cookie persistence
     req.session.save((err) => {
-        if (err) {
-            console.error('[OAUTH START] Session save error:', err);
-            return res.status(500).send('Failed to initialize session');
-        }
-        
-        console.log('[OAUTH START] Session saved successfully', {
-            sessionId: req.sessionID,
-            stateSet: !!req.session.state,
-            stateLength: req.session.state?.length || 0,
-            cookieHeader: res.getHeader('Set-Cookie') ? 'set' : 'not set'
-        });
-        
-        // GitHub authorization URL
+        if (err) return res.status(500).send('Failed to initialize session');
         const authUrl = `https://github.com/login/oauth/authorize?client_id=${GITHUB_CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=repo&state=${state}`;
-        
-        console.log('[OAUTH START] Redirecting to GitHub', {
-            redirectUri: REDIRECT_URI,
-            stateLength: state.length
-        });
-        
         res.redirect(authUrl);
     });
 });
@@ -675,65 +262,11 @@ app.get('/api/auth/github', (req: express.Request, res: express.Response) => {
 // GitHub OAuth: Handle callback
 app.get('/api/auth/github/callback', async (req: express.Request, res: express.Response) => {
     const { code, state } = req.query;
-    const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
-    
-    console.log('[OAUTH CALLBACK] Request received', {
-        sessionId: req.sessionID,
-        hasCode: !!code,
-        hasState: !!state,
-        receivedState: state ? (state as string).substring(0, 8) + '...' : 'none',
-        hasSession: !!req.session,
-        sessionKeys: req.session ? Object.keys(req.session) : [],
-        sessionState: req.session?.state ? (req.session.state as string).substring(0, 8) + '...' : 'none',
-        cookies: req.headers.cookie ? req.headers.cookie.substring(0, 100) : 'none',
-        origin: req.headers.origin,
-        referer: req.headers.referer
-    });
     
     // Validate state
-    if (!state) {
-        console.error('[OAUTH CALLBACK] Missing state in query');
-        return res.redirect(`${frontendUrl}?error=missing_state`);
+    if (!state || state !== req.session.state) {
+        return res.status(400).send('Invalid state parameter');
     }
-    
-    if (!req.session) {
-        console.error('[OAUTH CALLBACK] No session object found', {
-            sessionId: req.sessionID,
-            cookies: req.headers.cookie ? 'present' : 'missing'
-        });
-        return res.redirect(`${frontendUrl}?error=session_expired`);
-    }
-    
-    if (!req.session.state) {
-        console.error('[OAUTH CALLBACK] Session state missing', {
-            sessionId: req.sessionID,
-            hasSession: !!req.session,
-            sessionKeys: Object.keys(req.session),
-            sessionData: JSON.stringify(req.session).substring(0, 200),
-            receivedState: state,
-            cookies: req.headers.cookie ? req.headers.cookie.substring(0, 100) : 'none'
-        });
-        return res.redirect(`${frontendUrl}?error=session_expired`);
-    }
-    
-    if (state !== req.session.state) {
-        console.error('[OAUTH CALLBACK] State mismatch', {
-            received: state,
-            expected: req.session.state,
-            receivedLength: (state as string).length,
-            expectedLength: req.session.state.length,
-            receivedStart: (state as string).substring(0, 16),
-            expectedStart: req.session.state.substring(0, 16),
-            sessionId: req.sessionID,
-            sessionKeys: Object.keys(req.session)
-        });
-        return res.redirect(`${frontendUrl}?error=invalid_state`);
-    }
-    
-    console.log('[OAUTH CALLBACK] State validated successfully', {
-        sessionId: req.sessionID,
-        stateMatch: true
-    });
     
     if (!code) {
         return res.status(400).send('Authorization code not provided');
@@ -777,70 +310,18 @@ app.get('/api/auth/github/callback', async (req: express.Request, res: express.R
         
         const userData = await userResponse.json();
         
-        const frontendUrl = (FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
-        
-        // Regenerate session to ensure a fresh cookie is set
-        // This is critical for cross-origin cookie persistence
-        req.session.regenerate((regenerateErr) => {
-            if (regenerateErr) {
-                console.error('[OAUTH CALLBACK] Session regeneration error:', regenerateErr);
-                return res.redirect(`${frontendUrl}?error=auth_failed`);
+        // Regenerate session to ensure new cookie is set (prevents fixation and improves cookie issuance)
+        req.session.regenerate((regenErr) => {
+            if (regenErr) {
+                return res.status(500).send('Failed to establish session');
             }
-            
-            // Now store auth data in the new session
             req.session.access_token = accessToken;
             req.session.user = userData;
-            req.session.state = undefined; // Clear state
-            
-            console.log('[OAUTH CALLBACK] Storing auth data in regenerated session', {
-                sessionId: req.sessionID,
-                hasAccessToken: !!accessToken,
-                hasUser: !!userData,
-                userId: userData?.login || 'unknown'
-            });
-            
-            // Save session - this will trigger express-session to set the cookie
-            req.session.save((err) => {
-            if (err) {
-                console.error('[OAUTH CALLBACK] Session save error after auth:', err);
-                return res.redirect(`${frontendUrl}?error=auth_failed`);
-            }
-            
-                // Log cookie headers - express-session should have set it after regenerate + save
-                const setCookieHeaders = res.getHeader('Set-Cookie');
-                console.log('[OAUTH CALLBACK] Session saved successfully', {
-                    sessionId: req.sessionID,
-                    cookieHeader: setCookieHeaders ? 'set' : 'not set',
-                    cookieValue: setCookieHeaders ? (Array.isArray(setCookieHeaders) ? setCookieHeaders[0]?.toString().substring(0, 100) : setCookieHeaders.toString().substring(0, 100)) : 'none',
-                    hasSetCookie: !!setCookieHeaders,
-                    setCookieCount: Array.isArray(setCookieHeaders) ? setCookieHeaders.length : (setCookieHeaders ? 1 : 0)
-                });
-                
-                console.log('[OAUTH CALLBACK] Redirecting to frontend', {
-                    frontendUrl,
-                    sessionId: req.sessionID,
-                    setCookiePreview: setCookieHeaders ? (Array.isArray(setCookieHeaders) ? setCookieHeaders[0]?.toString().substring(0, 150) : setCookieHeaders.toString().substring(0, 150)) : 'none'
-                });
-                
-                // For cross-origin cookies, use an HTML redirect page instead of res.redirect()
-                // This ensures the cookie is set before navigation
-                // express-session will set the cookie when res.end() is called
-                res.send(`
-<!DOCTYPE html>
-<html>
-<head>
-    <meta http-equiv="refresh" content="0;url=${frontendUrl}?authenticated=true">
-    <script>
-        // Fallback redirect in case meta refresh doesn't work
-        window.location.href = "${frontendUrl}?authenticated=true";
-    </script>
-</head>
-<body>
-    <p>Redirecting...</p>
-    <a href="${frontendUrl}?authenticated=true">Click here if you are not redirected</a>
-</body>
-</html>
-                `);
+            req.session.state = undefined;
+            req.session.save(() => {
+                // Send small HTML page to ensure Set-Cookie is processed before navigation
+                const redirectTarget = FRONTEND_URL + '?authenticated=true';
+                res.send(`<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0;url=${redirectTarget}"></head><body><a href="${redirectTarget}">Continue</a></body></html>`);
             });
         });
     } catch (error) {
@@ -853,17 +334,7 @@ app.get('/api/auth/github/callback', async (req: express.Request, res: express.R
 
 // Check authentication status
 app.get('/api/auth/status', (req: express.Request, res: express.Response) => {
-    console.log('[AUTH STATUS] Checking authentication', {
-        sessionId: req.sessionID,
-        hasSession: !!req.session,
-        hasAccessToken: !!(req.session && req.session.access_token),
-        hasUser: !!(req.session && req.session.user),
-        sessionKeys: req.session ? Object.keys(req.session) : [],
-        cookies: req.headers.cookie ? req.headers.cookie.substring(0, 50) + '...' : 'none',
-        origin: req.headers.origin
-    });
-    
-    if (req.session && req.session.access_token && req.session.user) {
+    if (req.session.access_token && req.session.user) {
         res.json({
             authenticated: true,
             user: req.session.user
@@ -979,7 +450,7 @@ async function processRepoAnalysis(repoUrl: string, jobId: string, accessToken?:
         const authors = Array.from(authorMap.entries()).map(([name, count]) => ({ name, commitCount: count }));
 
         const result = { repoData, authors };
-        await storeRepo(repoUrl, result);
+        storeRepo(repoUrl, result);
         updateJobStatus(jobId, 'complete', result);
 
     } catch (error: any) {
@@ -1003,7 +474,7 @@ app.post('/api/analyze', async (req: express.Request, res: express.Response) => 
     }
 
     // Check database cache first
-    const cached = await getRepo(repoUrl);
+    const cached = getRepo(repoUrl);
     if (cached) {
         return res.json(cached);
     }

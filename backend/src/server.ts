@@ -122,7 +122,8 @@ let sessionStore: any = new session.MemoryStore();
 // This allows the store to be updated after middleware creation
 // Must extend EventEmitter because express-session expects store.on('disconnect')
 class DelegatingStore extends EventEmitter {
-    private currentStore: any;
+    // Use public accessor so Proxy can access it
+    public currentStore: any;
     
     constructor(initialStore: any) {
         super();
@@ -186,9 +187,54 @@ class DelegatingStore extends EventEmitter {
         // Fallback: generate session ID using crypto (same as express-session default)
         return crypto.randomBytes(24).toString('base64url');
     }
+    
+    // Additional methods that express-session might call
+    createSession(req: any, sess: any) {
+        if (this.currentStore.createSession) {
+            return this.currentStore.createSession(req, sess);
+        }
+        // Fallback: return the session as-is if createSession is not implemented
+        return sess;
+    }
+    
+    // Proxy any other method calls to the current store using a getter
+    // This handles any other methods we might have missed
+    getProperty(prop: string): any {
+        if (prop in this) {
+            return (this as any)[prop];
+        }
+        if (this.currentStore && typeof this.currentStore[prop] === 'function') {
+            return (...args: any[]) => (this.currentStore as any)[prop](...args);
+        }
+        return this.currentStore?.[prop];
+    }
 }
 
-const delegatingStore = new DelegatingStore(sessionStore);
+// Create a Proxy wrapper that forwards all property access to the store
+const createDelegatingStoreProxy = (store: DelegatingStore): any => {
+    return new Proxy(store, {
+        get(target, prop: string | symbol) {
+            // Handle Symbol properties (like Symbol.toStringTag)
+            if (typeof prop === 'symbol') {
+                return (target as any)[prop];
+            }
+            
+            // If the property exists on the DelegatingStore, return it
+            if (prop in target) {
+                return (target as any)[prop];
+            }
+            
+            // Otherwise, forward to the current store
+            const currentStore = (target as any).currentStore;
+            if (currentStore && typeof currentStore[prop] === 'function') {
+                return (...args: any[]) => currentStore[prop](...args);
+            }
+            return currentStore?.[prop];
+        }
+    });
+};
+
+const delegatingStore = createDelegatingStoreProxy(new DelegatingStore(sessionStore));
 
 // Async function to initialize PostgreSQL session store if DATABASE_URL is available
 async function initializeSessionStore() {

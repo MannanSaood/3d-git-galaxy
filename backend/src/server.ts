@@ -9,14 +9,14 @@ import type { RepoData, CommitNode } from './types';
 import crypto from 'crypto';
 import session from 'express-session';
 import { fileURLToPath } from 'url';
-// trust proxy is required for secure cookies behind a load balancer
-app.set('trust proxy', 1);
 import dotenv from 'dotenv';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { initDb, getRepo, storeRepo } from './database.js';
 import { addJob, getJobStatus, updateJobStatus } from './jobQueue.js';
 
 const app = express();
+// trust proxy is required for secure cookies behind a load balancer
+app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3001;
 
 const __filename = fileURLToPath(import.meta.url);

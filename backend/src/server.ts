@@ -777,47 +777,55 @@ app.get('/api/auth/github/callback', async (req: express.Request, res: express.R
         
         const userData = await userResponse.json();
         
-        // Store in session
-        req.session.access_token = accessToken;
-        req.session.user = userData;
-        req.session.state = undefined; // Clear state
+        const frontendUrl = (FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
         
-        console.log('[OAUTH CALLBACK] Storing auth data in session', {
-            sessionId: req.sessionID,
-            hasAccessToken: !!accessToken,
-            hasUser: !!userData,
-            userId: userData?.login || 'unknown'
-        });
-        
-        // Save session before redirecting (critical for cross-origin)
-        req.session.save((err) => {
-            if (err) {
-                console.error('[OAUTH CALLBACK] Session save error after auth:', err);
-                const frontendUrl = (FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+        // Regenerate session to ensure a fresh cookie is set
+        // This is critical for cross-origin cookie persistence
+        req.session.regenerate((regenerateErr) => {
+            if (regenerateErr) {
+                console.error('[OAUTH CALLBACK] Session regeneration error:', regenerateErr);
                 return res.redirect(`${frontendUrl}?error=auth_failed`);
             }
             
-            // Log cookie headers before redirect
-            const setCookieHeaders = res.getHeader('Set-Cookie');
-            const frontendUrl = (FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+            // Now store auth data in the new session
+            req.session.access_token = accessToken;
+            req.session.user = userData;
+            req.session.state = undefined; // Clear state
             
-            console.log('[OAUTH CALLBACK] Session saved successfully', {
+            console.log('[OAUTH CALLBACK] Storing auth data in regenerated session', {
                 sessionId: req.sessionID,
-                cookieHeader: setCookieHeaders ? 'set' : 'not set',
-                cookieValue: setCookieHeaders ? (Array.isArray(setCookieHeaders) ? setCookieHeaders[0]?.toString().substring(0, 100) : setCookieHeaders.toString().substring(0, 100)) : 'none',
-                hasSetCookie: !!setCookieHeaders,
-                setCookieCount: Array.isArray(setCookieHeaders) ? setCookieHeaders.length : (setCookieHeaders ? 1 : 0)
+                hasAccessToken: !!accessToken,
+                hasUser: !!userData,
+                userId: userData?.login || 'unknown'
             });
             
-            console.log('[OAUTH CALLBACK] Redirecting to frontend', {
-                frontendUrl,
-                sessionId: req.sessionID,
-                setCookiePreview: setCookieHeaders ? (Array.isArray(setCookieHeaders) ? setCookieHeaders[0]?.toString().substring(0, 150) : setCookieHeaders.toString().substring(0, 150)) : 'none'
-            });
+            // Save session - this will trigger express-session to set the cookie
+            req.session.save((err) => {
+            if (err) {
+                console.error('[OAUTH CALLBACK] Session save error after auth:', err);
+                return res.redirect(`${frontendUrl}?error=auth_failed`);
+            }
             
-            // For cross-origin cookies, use an HTML redirect page instead of res.redirect()
-            // This ensures the cookie is set before navigation
-            res.send(`
+                // Log cookie headers - express-session should have set it after regenerate + save
+                const setCookieHeaders = res.getHeader('Set-Cookie');
+                console.log('[OAUTH CALLBACK] Session saved successfully', {
+                    sessionId: req.sessionID,
+                    cookieHeader: setCookieHeaders ? 'set' : 'not set',
+                    cookieValue: setCookieHeaders ? (Array.isArray(setCookieHeaders) ? setCookieHeaders[0]?.toString().substring(0, 100) : setCookieHeaders.toString().substring(0, 100)) : 'none',
+                    hasSetCookie: !!setCookieHeaders,
+                    setCookieCount: Array.isArray(setCookieHeaders) ? setCookieHeaders.length : (setCookieHeaders ? 1 : 0)
+                });
+                
+                console.log('[OAUTH CALLBACK] Redirecting to frontend', {
+                    frontendUrl,
+                    sessionId: req.sessionID,
+                    setCookiePreview: setCookieHeaders ? (Array.isArray(setCookieHeaders) ? setCookieHeaders[0]?.toString().substring(0, 150) : setCookieHeaders.toString().substring(0, 150)) : 'none'
+                });
+                
+                // For cross-origin cookies, use an HTML redirect page instead of res.redirect()
+                // This ensures the cookie is set before navigation
+                // express-session will set the cookie when res.end() is called
+                res.send(`
 <!DOCTYPE html>
 <html>
 <head>
@@ -832,7 +840,8 @@ app.get('/api/auth/github/callback', async (req: express.Request, res: express.R
     <a href="${frontendUrl}?authenticated=true">Click here if you are not redirected</a>
 </body>
 </html>
-            `);
+                `);
+            });
         });
     } catch (error) {
         if (process.env.NODE_ENV === 'development') {
